@@ -1,0 +1,283 @@
+@Library('share_lib@master') _
+
+/**
+ * Microservices Orchestrator Pipeline
+ *
+ * Called ONCE by the backend per workspace deployment.
+ * Receives the full service topology as JSON, resolves deployment order,
+ * and triggers Jenkinsfile-service per service in sequence.
+ *
+ * Backend responsibility:
+ *   - Scan mono/multi repo and detect services
+ *   - Build the topology + relationship graph
+ *   - Resolve internal K8s URLs for each service
+ *   - Call this pipeline with the resolved SERVICES_JSON
+ *
+ * This pipeline responsibility:
+ *   - Validate the topology
+ *   - Topological sort (deploy dependencies first)
+ *   - Trigger each service pipeline in order
+ *   - Report overall status back
+ */
+
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 60, unit: 'MINUTES')
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    parameters {
+        string(
+            name: 'USER_ID',
+            defaultValue: '',
+            description: 'Tenant user ID'
+        )
+        string(
+            name: 'WORKSPACE_ID',
+            defaultValue: '',
+            description: 'Workspace ID / slug'
+        )
+        string(
+            name: 'PLATFORM_DOMAIN',
+            defaultValue: 'apps.example.com',
+            description: 'Wildcard platform domain'
+        )
+        string(
+            name: 'GITOPS_BRANCH',
+            defaultValue: 'main',
+            description: 'GitOps branch to update'
+        )
+        booleanParam(
+            name: 'ENABLE_TRIVY_SCAN',
+            defaultValue: true,
+            description: 'Run Trivy scan on each service image'
+        )
+        booleanParam(
+            name: 'ROLLBACK_MODE',
+            defaultValue: false,
+            description: 'Rollback all services to saved image tags'
+        )
+        /*
+         * SERVICES_JSON — provided by backend, never typed by hand.
+         *
+         * Schema:
+         * [
+         *   {
+         *     "name": "api-gateway",
+         *     "serviceType": "gateway",          // gateway | internal | registry
+         *     "repoUrl": "https://github.com/org/api-gateway.git",
+         *     "branch": "main",
+         *     "repoCredentialsId": "",           // optional Jenkins credential ID
+         *     "framework": "",                   // optional override; blank = auto-detect
+         *     "appPort": "8080",
+         *     "imageTag": "",                    // optional; for rollback
+         *     "envJson": "[]",                   // user-supplied env vars
+         *     "relationships": [                 // resolved by backend
+         *       { "name": "ORDER_SERVICE_URL",
+         *         "value": "http://order-service.user-abc.svc.cluster.local" }
+         *     ],
+         *     "dependsOn": ["config-server", "eureka"]  // deploy order hint
+         *   },
+         *   ...
+         * ]
+         */
+        string(
+            name: 'SERVICES_JSON',
+            defaultValue: '[]',
+            description: 'JSON array of service descriptors (backend-provided)'
+        )
+    }
+
+    environment {
+        INFRA_REPO_URL          = credentials('infra-repo-url')
+        REGISTRY_REPOSITORY     = credentials('registry-repository')
+        GITOPS_REPO_URL         = credentials('gitops-repo-url')
+    }
+
+    stages {
+
+        stage('Validate') {
+            steps {
+                script {
+                    if (!params.USER_ID?.trim()) {
+                        error('USER_ID is required')
+                    }
+                    if (!params.SERVICES_JSON?.trim() || params.SERVICES_JSON.trim() == '[]') {
+                        error('SERVICES_JSON is required and must not be empty')
+                    }
+
+                    def services
+                    try {
+                        services = readJSON text: params.SERVICES_JSON
+                    } catch (Exception e) {
+                        error("SERVICES_JSON is not valid JSON: ${e.message}")
+                    }
+
+                    if (!(services instanceof List) || services.isEmpty()) {
+                        error('SERVICES_JSON must be a non-empty JSON array')
+                    }
+
+                    services.each { svc ->
+                        if (!svc.name?.trim())    error("Service entry missing 'name': ${svc}")
+                        if (!svc.repoUrl?.trim()) error("Service '${svc.name}' missing 'repoUrl'")
+                    }
+
+                    env.EFFECTIVE_WORKSPACE_ID = params.WORKSPACE_ID?.trim() ?: params.USER_ID.trim()
+                    echo "Validated ${services.size()} service(s) for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+                }
+            }
+        }
+
+        stage('Resolve deploy order') {
+            steps {
+                script {
+                    def services = readJSON text: params.SERVICES_JSON
+
+                    // Topological sort by dependsOn
+                    def ordered = topologicalSort(services)
+                    env.ORDERED_SERVICE_NAMES = ordered.collect { it.name }.join(',')
+                    // Store full sorted list as JSON for downstream use
+                    env.ORDERED_SERVICES_JSON = writeJSON returnText: true, json: ordered
+
+                    echo "Deploy order: ${env.ORDERED_SERVICE_NAMES}"
+                }
+            }
+        }
+
+        stage('Deploy services') {
+            steps {
+                script {
+                    def services = readJSON text: env.ORDERED_SERVICES_JSON
+                    def failures = []
+
+                    services.each { svc ->
+                        echo "=== Deploying service: ${svc.name} (type: ${svc.serviceType ?: 'internal'}) ==="
+
+                        // Merge user envJson + resolved relationship URLs into one flat JSON array
+                        def mergedEnvJson = mergeEnvAndRelationships(
+                            svc.envJson ?: '[]',
+                            svc.relationships ?: []
+                        )
+
+                        try {
+                            build job: 'deploy-service',
+                                wait: true,
+                                propagate: true,
+                                parameters: [
+                                    string(name: 'REPO_URL',                  value: svc.repoUrl),
+                                    string(name: 'BRANCH',                    value: svc.branch ?: 'main'),
+                                    string(name: 'USER_ID',                   value: params.USER_ID),
+                                    string(name: 'WORKSPACE_ID',              value: env.EFFECTIVE_WORKSPACE_ID),
+                                    string(name: 'PROJECT_NAME',              value: svc.name),
+                                    string(name: 'APP_PORT',                  value: svc.appPort ?: '8080'),
+                                    string(name: 'FRAMEWORK',                 value: svc.framework ?: ''),
+                                    string(name: 'IMAGE_TAG',                 value: svc.imageTag ?: ''),
+                                    string(name: 'ENV_JSON',                  value: mergedEnvJson),
+                                    string(name: 'SERVICE_TYPE',              value: svc.serviceType ?: 'internal'),
+                                    string(name: 'PLATFORM_DOMAIN',           value: params.PLATFORM_DOMAIN),
+                                    string(name: 'GITOPS_BRANCH',             value: params.GITOPS_BRANCH),
+                                    string(name: 'REPO_CREDENTIALS_ID',       value: svc.repoCredentialsId ?: ''),
+                                    booleanParam(name: 'ENABLE_TRIVY_SCAN',   value: params.ENABLE_TRIVY_SCAN),
+                                    booleanParam(name: 'ENABLE_GITOPS_UPDATE',value: true),
+                                    booleanParam(name: 'ROLLBACK_MODE',       value: params.ROLLBACK_MODE)
+                                ]
+                            echo "=== ${svc.name}: deployed successfully ==="
+                        } catch (Exception e) {
+                            echo "=== ${svc.name}: FAILED — ${e.message} ==="
+                            failures << svc.name
+                            // Continue deploying other services; report all failures at end
+                        }
+                    }
+
+                    if (failures) {
+                        error("The following services failed to deploy: ${failures.join(', ')}")
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "All services deployed successfully for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+        }
+        failure {
+            echo "One or more services failed. Check individual service job logs."
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Kahn's algorithm topological sort.
+ * Services with no dependsOn are deployed first (e.g. config-server, eureka).
+ * Cycles fall back to original order with a warning.
+ */
+def topologicalSort(List services) {
+    def nameToSvc = services.collectEntries { [(it.name): it] }
+    def inDegree  = services.collectEntries { [(it.name): 0] }
+    def graph     = services.collectEntries { [(it.name): []] }
+
+    services.each { svc ->
+        (svc.dependsOn ?: []).each { dep ->
+            if (nameToSvc.containsKey(dep)) {
+                graph[dep] << svc.name
+                inDegree[svc.name] = (inDegree[svc.name] ?: 0) + 1
+            } else {
+                echo "WARNING: '${svc.name}' depends on unknown service '${dep}' — ignoring"
+            }
+        }
+    }
+
+    def queue   = inDegree.findAll { it.value == 0 }.keySet().toList()
+    def ordered = []
+
+    while (!queue.isEmpty()) {
+        def current = queue.remove(0)
+        ordered << nameToSvc[current]
+        graph[current].each { neighbour ->
+            inDegree[neighbour]--
+            if (inDegree[neighbour] == 0) queue << neighbour
+        }
+    }
+
+    if (ordered.size() != services.size()) {
+        echo "WARNING: Cycle detected in dependsOn graph — falling back to original order"
+        return services
+    }
+
+    return ordered
+}
+
+/**
+ * Merge user-supplied envJson array with backend-resolved relationship URLs.
+ * Relationship entries take precedence over same-named user entries.
+ * Returns a JSON string.
+ */
+def mergeEnvAndRelationships(String envJson, List relationships) {
+    def userVars = []
+    try {
+        userVars = readJSON text: (envJson?.trim() ?: '[]')
+    } catch (Exception ignored) {
+        echo "WARNING: Could not parse envJson — treating as empty: ${envJson}"
+    }
+
+    def relVars = relationships.collect { rel ->
+        [name: rel.name, value: rel.value]
+    }
+
+    // Index user vars, then overlay relationship vars
+    def merged = [:]
+    userVars.each  { v -> merged[v.name] = v.value }
+    relVars.each   { v -> merged[v.name] = v.value }
+
+    def result = merged.collect { k, v -> [name: k, value: v] }
+    return writeJSON returnText: true, json: result
+}

@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tenant-app.fullname" . }}
+  namespace: {{ .Values.app.namespace }}
+  labels:
+    {{- include "tenant-app.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "tenant-app.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "tenant-app.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        platform.devops/user-id: {{ .Values.app.userId | quote }}
+        platform.devops/project-name: {{ .Values.app.projectName | quote }}
+    spec:
+      serviceAccountName: {{ if .Values.serviceAccount.create }}{{ default (include "tenant-app.fullname" .) .Values.serviceAccount.name }}{{ else }}default{{ end }}
+      {{- $probeMode := default "http" .Values.probes.mode }}
+      {{- $envJson := trim (default "" .Values.envJson) }}
+      {{- $envVars := .Values.env | default (list) }}
+      {{- if $envJson }}
+      {{- $envVars = fromJson $envJson }}
+      {{- end }}
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ include "tenant-app.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.app.containerPort }}
+              name: http
+          {{- if $envVars }}
+          env:
+            {{- toYaml $envVars | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if and .Values.probes .Values.probes.startup .Values.probes.startup.enabled }}
+          startupProbe:
+            {{- if eq $probeMode "tcp" }}
+            tcpSocket:
+              port: http
+            {{- else }}
+            httpGet:
+              path: {{ .Values.probes.startup.path }}
+              port: http
+            {{- end }}
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
+          {{- if and .Values.probes .Values.probes.readiness .Values.probes.readiness.enabled }}
+          readinessProbe:
+            {{- if eq $probeMode "tcp" }}
+            tcpSocket:
+              port: http
+            {{- else }}
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            {{- end }}
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          {{- if and .Values.probes .Values.probes.liveness .Values.probes.liveness.enabled }}
+          livenessProbe:
+            {{- if eq $probeMode "tcp" }}
+            tcpSocket:
+              port: http
+            {{- else }}
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            {{- end }}
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

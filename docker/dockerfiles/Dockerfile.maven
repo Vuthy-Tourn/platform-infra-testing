@@ -1,0 +1,15 @@
+ARG JAVA_VERSION=__JAVA_VERSION__
+FROM maven:3.9.9-eclipse-temurin-${JAVA_VERSION}-alpine AS builder
+WORKDIR /app
+COPY . .
+RUN if [ -f mvnw ]; then \
+      chmod +x mvnw && ./mvnw -B -DskipTests package; \
+    else \
+      mvn -B -DskipTests package; \
+    fi
+
+FROM eclipse-temurin:${JAVA_VERSION}-jre-alpine
+WORKDIR /app
+COPY --from=builder /app/target/*.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]

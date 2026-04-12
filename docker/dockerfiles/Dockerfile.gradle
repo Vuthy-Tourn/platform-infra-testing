@@ -1,0 +1,15 @@
+ARG JAVA_VERSION=__JAVA_VERSION__
+FROM eclipse-temurin:${JAVA_VERSION}-jdk AS builder
+WORKDIR /app
+COPY . .
+RUN if [ -f gradlew ]; then \
+      chmod +x gradlew && ./gradlew clean bootJar --no-daemon -x test; \
+    else \
+      gradle clean bootJar --no-daemon -x test; \
+    fi
+
+FROM eclipse-temurin:${JAVA_VERSION}-jre-alpine
+WORKDIR /app
+COPY --from=builder /app/build/libs/*.jar /app/app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]

@@ -1,0 +1,430 @@
+@Library('share_lib@master') _
+
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 20, unit: 'MINUTES')
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '50'))
+        // ansiColor('xterm')
+    }
+
+    parameters {
+        string(name: 'REPO_URL', defaultValue: '', description: 'Git repository URL from user (GitHub/GitLab)')
+        string(name: 'BRANCH', defaultValue: 'main', description: 'Git branch to build')
+        string(name: 'USER_ID', defaultValue: '', description: 'Tenant user id')
+        string(name: 'WORKSPACE_ID', defaultValue: '', description: 'Workspace id/slug for GitOps path partitioning')
+        string(name: 'CUSTOM_DOMAIN', defaultValue: '', description: 'Optional custom host (example: app.example.com)')
+        string(name: 'PROJECT_NAME', defaultValue: '', description: 'Project slug')
+        string(name: 'APP_NAME', defaultValue: '', description: 'Legacy alias for PROJECT_NAME')
+        string(name: 'APP_PORT', defaultValue: '8080', description: 'Container application port')
+        string(name: 'ENV_JSON', defaultValue: '[]', description: 'JSON array of environment variables to write into GitOps')
+        string(name: 'IMAGE_TAG', defaultValue: '', description: 'Optional image tag provided by backend (deploy or rollback)')
+        string(name: 'FRAMEWORK', defaultValue: '', description: 'Optional framework override provided by backend')
+        string(name: 'PLATFORM_DOMAIN', defaultValue: 'apps.example.com', description: 'Wildcard platform domain')
+        string(name: 'GITOPS_BRANCH', defaultValue: 'main', description: 'GitOps branch to update')
+        string(name: 'REPO_CREDENTIALS_ID', defaultValue: '', description: 'Optional Jenkins credential id for private user repositories')
+        string(name: 'SERVICE_TYPE', defaultValue: 'internal', description: 'Service role: gateway | internal | registry. Controls ingress and probe behaviour.')
+        booleanParam(name: 'ENABLE_TRIVY_SCAN', defaultValue: true, description: 'Run local Trivy image scan')
+        booleanParam(name: 'ENABLE_GITOPS_UPDATE', defaultValue: true, description: 'Update GitOps repository after push')
+        booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Skip build/scan/push and update GitOps with a saved image tag')
+    }
+
+    environment {
+        INFRA_REPO_URL = credentials('infra-repo-url')
+        REGISTRY_REPOSITORY = credentials('registry-repository')
+        GITOPS_REPO_URL = credentials('gitops-repo-url')
+    }
+
+    stages {
+        stage('Validate input') {
+            steps {
+                script {
+                    if (!params.REPO_URL?.trim()) {
+                        error('REPO_URL is required')
+                    }
+                    if (!params.USER_ID?.trim()) {
+                        error('USER_ID is required')
+                    }
+                    env.EFFECTIVE_WORKSPACE_ID = params.WORKSPACE_ID?.trim() ? params.WORKSPACE_ID.trim() : params.USER_ID.trim()
+                    if (!env.EFFECTIVE_WORKSPACE_ID) {
+                        error('WORKSPACE_ID is required (or falls back to USER_ID)')
+                    }
+                    env.EFFECTIVE_PROJECT_NAME = params.PROJECT_NAME?.trim() ? params.PROJECT_NAME.trim() : params.APP_NAME?.trim()
+                    if (!env.EFFECTIVE_PROJECT_NAME) {
+                        error('PROJECT_NAME (or APP_NAME) is required')
+                    }
+                    if (!(params.APP_PORT ==~ /^\d+$/)) {
+                        error('APP_PORT must be numeric')
+                    }
+                    if (params.ROLLBACK_MODE) {
+                        if (!params.FRAMEWORK?.trim()) {
+                            error('FRAMEWORK is required in rollback mode')
+                        }
+                        if (!params.IMAGE_TAG?.trim()) {
+                            error('IMAGE_TAG is required in rollback mode')
+                        }
+                    }
+
+                    def normalizedRegistry = (env.REGISTRY_REPOSITORY ?: '')
+                        .replaceFirst(/^https?:\/\//, '')
+                        .replaceAll(/\/+$/, '')
+                    if (!normalizedRegistry.contains('/')) {
+                        error('REGISTRY_REPOSITORY must include registry host and Harbor project (example: harbor.devith.it.com/deployment-pipeline)')
+                    }
+
+                    echo "ENABLE_GITOPS_UPDATE=${params.ENABLE_GITOPS_UPDATE} | GITOPS_BRANCH=${params.GITOPS_BRANCH} | WORKSPACE_ID=${env.EFFECTIVE_WORKSPACE_ID} | CUSTOM_DOMAIN=${params.CUSTOM_DOMAIN}"
+
+                    env.SAFE_USER_ID = sh(
+                        script: '''echo "$USER_ID" | tr '[:upper:]' '[:lower:]' | sed -E "s/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g" | cut -c1-30''',
+                        returnStdout: true
+                    ).trim()
+                    env.SAFE_WORKSPACE_ID = sh(
+                        script: '''echo "$EFFECTIVE_WORKSPACE_ID" | tr '[:upper:]' '[:lower:]' | sed -E "s/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g" | cut -c1-30''',
+                        returnStdout: true
+                    ).trim()
+                    env.SAFE_PROJECT_NAME = sh(
+                        script: '''echo "$EFFECTIVE_PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed -E "s/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g" | cut -c1-40''',
+                        returnStdout: true
+                    ).trim()
+
+                    env.NORMALIZED_REGISTRY_REPOSITORY = sh(
+                        script: '''echo "$REGISTRY_REPOSITORY" | sed -E 's#^https?://##; s#/*$##' ''',
+                        returnStdout: true
+                    ).trim()
+
+                    env.REGISTRY_LOGIN_SERVER = sh(
+                        script: '''echo "$REGISTRY_REPOSITORY" | sed -E 's#^https?://##' | cut -d/ -f1''',
+                        returnStdout: true
+                    ).trim()
+
+                    env.IMAGE_REPOSITORY = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_USER_ID}/${env.SAFE_PROJECT_NAME}"
+                    if (params.IMAGE_TAG?.trim()) {
+                        env.IMAGE_TAG = params.IMAGE_TAG.trim()
+                    }
+                    if (params.FRAMEWORK?.trim()) {
+                        env.FRAMEWORK = params.FRAMEWORK.trim()
+                    }
+                    if (env.IMAGE_TAG?.trim()) {
+                        env.IMAGE_FULL = "${env.IMAGE_REPOSITORY}:${env.IMAGE_TAG}"
+                    }
+                    if (params.ROLLBACK_MODE) {
+                        env.APP_COMMIT_SHA = "rollback-${env.IMAGE_TAG}"
+                    }
+                }
+            }
+        }
+
+        stage('Checkout infra') {
+            steps {
+                dir('platform-infra') {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        userRemoteConfigs: [[
+                            url: env.INFRA_REPO_URL,
+                            credentialsId: 'infra-repo-creds'
+                        ]]
+                    ])
+                }
+            }
+        }
+
+        stage('Checkout user repository') {
+            when {
+                expression { return !params.ROLLBACK_MODE }
+            }
+            steps {
+                dir('user-app') {
+                    script {
+                        env.NORMALIZED_REPO_URL = params.REPO_URL
+                        if (params.REPO_URL?.contains('%')) {
+                            try {
+                                env.NORMALIZED_REPO_URL = java.net.URLDecoder.decode(params.REPO_URL, 'UTF-8')
+                            } catch (Exception ignored) {
+                                echo 'Could not decode REPO_URL, using original value.'
+                            }
+                        }
+
+                        if (params.REPO_CREDENTIALS_ID?.trim()) {
+                            checkout([
+                                $class: 'GitSCM',
+                                branches: [[name: "*/${params.BRANCH}"]],
+                                userRemoteConfigs: [[
+                                    url: env.NORMALIZED_REPO_URL,
+                                    credentialsId: params.REPO_CREDENTIALS_ID
+                                ]]
+                            ])
+                        } else {
+                            git url: env.NORMALIZED_REPO_URL, branch: params.BRANCH
+                        }
+
+                        env.APP_COMMIT_SHA = sh(script: 'git rev-parse --short=12 HEAD', returnStdout: true).trim()
+                        if (!env.IMAGE_TAG?.trim()) {
+                            env.IMAGE_TAG = "${env.SAFE_USER_ID}-${env.BUILD_NUMBER}-${env.APP_COMMIT_SHA}"
+                        }
+                        env.IMAGE_FULL = "${env.IMAGE_REPOSITORY}:${env.IMAGE_TAG}"
+
+                        echo "Resolved image tag: ${env.IMAGE_TAG}"
+                    }
+                }
+            }
+        }
+
+        stage('Detect framework') {
+            when {
+                expression { return !params.ROLLBACK_MODE }
+            }
+            steps {
+                dir('user-app') {
+                    script {
+                        String scriptsDir = sh(
+                            script: '''
+                                set -e
+                                for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
+                                    if [ -f "$d/detect-framework.sh" ]; then
+                                        echo "$d"
+                                        exit 0
+                                    fi
+                                done
+                                echo "ERROR: detect-framework.sh not found in expected infra directories." >&2
+                                ls -la "$WORKSPACE" >&2 || true
+                                exit 1
+                            ''',
+                            returnStdout: true
+                        ).trim()
+                        env.FRAMEWORK = sh(
+                            script: "bash '${scriptsDir}/detect-framework.sh'",
+                            returnStdout: true
+                        ).trim()
+                        echo "Detected framework: ${env.FRAMEWORK}"
+                    }
+                }
+            }
+        }
+
+        stage('Prepare Dockerfile') {
+            when {
+                expression { return !params.ROLLBACK_MODE }
+            }
+            steps {
+                dir('user-app') {
+                    sh '''
+                        SCRIPTS_DIR=""
+                        for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
+                            if [ -f "$d/generate-dockerfile.sh" ]; then
+                                SCRIPTS_DIR="$d"
+                                break
+                            fi
+                        done
+                        if [ -z "$SCRIPTS_DIR" ]; then
+                            echo "ERROR: generate-dockerfile.sh not found in expected infra directories."
+                            ls -la "$WORKSPACE" || true
+                            exit 1
+                        fi
+
+                        case "$FRAMEWORK" in
+                          springboot-*)
+                            echo "Using platform-managed Spring Boot Dockerfile template."
+                            FORCE_PLATFORM_DOCKERFILE=true bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
+                            ;;
+                          *)
+                            if [ -f Dockerfile ]; then
+                                echo "Using user-provided Dockerfile."
+                            else
+                                echo "Generating Dockerfile from platform template."
+                                bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
+                            fi
+                            ;;
+                        esac
+                    '''
+                }
+            }
+        }
+
+        stage('Build → Scan → Push') {
+            when {
+                expression { return !params.ROLLBACK_MODE }
+            }
+            agent { label 'trivy' }
+            steps {
+                script {
+                    // Re-checkout infra (for scripts + helm chart)
+                    dir('platform-infra') {
+                        checkout([
+                            $class: 'GitSCM',
+                            branches: [[name: '*/main']],
+                            userRemoteConfigs: [[
+                                url: env.INFRA_REPO_URL,
+                                credentialsId: 'infra-repo-creds'
+                            ]]
+                        ])
+                    }
+
+                    // Re-checkout user app
+                    dir('user-app') {
+                        if (params.REPO_CREDENTIALS_ID?.trim()) {
+                            checkout([
+                                $class: 'GitSCM',
+                                branches: [[name: "*/${params.BRANCH}"]],
+                                userRemoteConfigs: [[
+                                    url: env.NORMALIZED_REPO_URL,
+                                    credentialsId: params.REPO_CREDENTIALS_ID
+                                ]]
+                            ])
+                        } else {
+                            git url: env.NORMALIZED_REPO_URL, branch: params.BRANCH
+                        }
+                    }
+
+                    // Prepare Dockerfile (in case user didn't provide one)
+                    dir('user-app') {
+                        sh '''
+                            SCRIPTS_DIR=""
+                            for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
+                                if [ -f "$d/generate-dockerfile.sh" ]; then
+                                    SCRIPTS_DIR="$d"
+                                    break
+                                fi
+                            done
+                            if [ -z "$SCRIPTS_DIR" ]; then
+                                echo "ERROR: generate-dockerfile.sh not found in expected infra directories."
+                                ls -la "$WORKSPACE" || true
+                                exit 1
+                            fi
+
+                            case "$FRAMEWORK" in
+                              springboot-*)
+                                echo "Using platform-managed Spring Boot Dockerfile template."
+                                FORCE_PLATFORM_DOCKERFILE=true bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
+                                ;;
+                              *)
+                                if [ -f Dockerfile ]; then
+                                    echo "Using user-provided Dockerfile."
+                                else
+                                    echo "Generating Dockerfile from platform template."
+                                    bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
+                                fi
+                                ;;
+                            esac
+                        '''
+                    }
+
+                    // Build
+                    dir('user-app') {
+                        sh '''
+                            echo "[build] Starting docker build for ${IMAGE_FULL}"
+                            docker build --pull --progress=plain --provenance=false -t "$IMAGE_FULL" .
+                            echo "[build] Docker build completed"
+                        '''
+                    }
+
+                // 2. Scan (conditional — but does NOT gate the push on its own)
+                if (params.ENABLE_TRIVY_SCAN) {
+                    echo "[scan] Starting Trivy scan for ${env.IMAGE_FULL}"
+                    trivyScan(
+                        fullImage: env.IMAGE_FULL,
+                        trivyPath: '/home/enz/trivy/docker-compose.yml',
+                        reportPath: '/home/enz/trivy/reports/trivy-report.json',
+                        gateSeverity: 'HIGH,CRITICAL'
+                    )
+                    echo "[scan] Trivy scan completed, uploading to DefectDojo"
+                    uploadDefectDojo(
+                        defectdojoUrl: 'https://defectdojo.devith.it.com',
+                        defectdojoCredentialId: 'DEFECTDOJO',
+                        reportPath: '/home/enz/trivy/reports/trivy-report.json',
+                        productTypeName: 'Web Applications',
+                        productName: env.EFFECTIVE_PROJECT_NAME,
+                        engagementName: "Jenkins-${env.BUILD_NUMBER}",
+                        testTitle: "Trivy Image Scan - ${env.IMAGE_TAG}"
+                    )
+                    echo "[scan] DefectDojo upload completed"
+                }
+
+                // 3. Push — always runs after scan (scan failures call error() and stop execution)
+                withCredentials([usernamePassword(
+                    credentialsId: 'registry-credentials',
+                    usernameVariable: 'REGISTRY_USERNAME',
+                    passwordVariable: 'REGISTRY_PASSWORD'
+                )]) {
+                    sh '''
+                        echo "[push] Pushing image ${IMAGE_FULL}"
+                        echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
+                            -u "${REGISTRY_USERNAME}" --password-stdin
+                        docker push "${IMAGE_FULL}"
+                        echo "[push] Image push completed"
+                    '''
+                    }
+                }
+            }
+        }
+
+        stage('Update GitOps repository') {
+            when {
+                expression { return params.ENABLE_GITOPS_UPDATE }
+            }
+            steps {
+                withCredentials([sshUserPrivateKey(credentialsId: 'gitops-ssh', keyFileVariable: 'SSH_KEY')]) {
+                    sh '''
+                        SCRIPTS_DIR=""
+                        INFRA_BASE_DIR=""
+                        for base in "$WORKSPACE/platform-infra" "$WORKSPACE/plateform-infra"; do
+                            if [ -f "$base/jenkins/scripts/update-gitops.sh" ]; then
+                                SCRIPTS_DIR="$base/jenkins/scripts"
+                                INFRA_BASE_DIR="$base"
+                                break
+                            fi
+                        done
+                        if [ -z "$SCRIPTS_DIR" ]; then
+                            echo "ERROR: update-gitops.sh not found in expected infra directories."
+                            ls -la "$WORKSPACE" || true
+                            exit 1
+                        fi
+
+                        OPERATION="deploy"
+                        if [ "${ROLLBACK_MODE}" = "true" ]; then
+                            OPERATION="rollback"
+                        fi
+
+                        bash "${SCRIPTS_DIR}/update-gitops.sh" \
+                          --gitops-repo "${GITOPS_REPO_URL}" \
+                          --gitops-branch "${GITOPS_BRANCH}" \
+                          --infra-repo "${INFRA_REPO_URL}" \
+                          --infra-revision "main" \
+                          --chart-path "helm/app-template" \
+                          --ssh-key "${SSH_KEY}" \
+                          --operation "${OPERATION}" \
+                          --workspace-id "${EFFECTIVE_WORKSPACE_ID}" \
+                          --user-id "${USER_ID}" \
+                          --project-name "${EFFECTIVE_PROJECT_NAME}" \
+                          --custom-domain "${CUSTOM_DOMAIN}" \
+                          --env-json "${ENV_JSON}" \
+                          --image-repository "${IMAGE_REPOSITORY}" \
+                          --image-tag "${IMAGE_TAG}" \
+                          --app-port "${APP_PORT}" \
+                          --platform-domain "${PLATFORM_DOMAIN}" \
+                          --framework "${FRAMEWORK}" \
+                          --service-type "${SERVICE_TYPE}" \
+                          --commit-sha "${APP_COMMIT_SHA}" \
+                          --build-number "${BUILD_NUMBER}"
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployment requested successfully for ${env.EFFECTIVE_PROJECT_NAME}."
+            echo "Image: ${env.IMAGE_FULL}"
+            echo "Expected URL: https://${env.SAFE_PROJECT_NAME}.${params.PLATFORM_DOMAIN}"
+        }
+        failure {
+            echo "Deployment failed. Check stage logs for details."
+        }
+        always {
+            cleanWs()
+        }
+    }
+}

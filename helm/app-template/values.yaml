@@ -1,0 +1,75 @@
+app:
+  name: "sample-app"
+  userId: "123"
+  projectName: "sample-app"
+  namespace: "user-123"
+  framework: "nodejs"
+  serviceType: "internal"
+  containerPort: 3000
+  servicePort: 80
+  domain: "apps.example.com"
+  host: "sample-app.apps.example.com"
+
+image:
+  repository: "registry.example.com/platform/123/sample-app"
+  tag: "user-123-1-abcdef123456" # managed-by-jenkins-image-tag
+  pullPolicy: "IfNotPresent"
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+probes:
+  mode: "http"
+  startup:
+    enabled: false
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    enabled: true
+    path: "/"
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3
+  liveness:
+    enabled: true
+    path: "/"
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    failureThreshold: 3
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  tls:
+    enabled: true
+    secretName: ""
+
+imagePullSecrets:
+  - name: "registry-secret"
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+env: []
+envJson: "[]"
+nodeSelector: {}
+tolerations: []
+affinity: {}
