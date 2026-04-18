@@ -50,10 +50,20 @@ pipeline {
             defaultValue: 'main',
             description: 'GitOps branch to update'
         )
+        string(
+            name: 'SERVICE_JOB_NAME',
+            defaultValue: 'deploy-service-test',
+            description: 'Jenkins job name used to deploy one service'
+        )
         booleanParam(
             name: 'ENABLE_TRIVY_SCAN',
             defaultValue: true,
             description: 'Run Trivy scan on each service image'
+        )
+        booleanParam(
+            name: 'ENABLE_GITOPS_UPDATE',
+            defaultValue: false,
+            description: 'Update GitOps repository for each service. Keep false for Jenkins-only testing.'
         )
         booleanParam(
             name: 'ROLLBACK_MODE',
@@ -127,6 +137,7 @@ pipeline {
 
                     env.EFFECTIVE_WORKSPACE_ID = params.WORKSPACE_ID?.trim() ?: params.USER_ID.trim()
                     echo "Validated ${services.size()} service(s) for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+                    echo "Downstream service job: ${params.SERVICE_JOB_NAME}"
                 }
             }
         }
@@ -163,7 +174,7 @@ pipeline {
                         )
 
                         try {
-                            build job: 'deploy-service',
+                            build job: params.SERVICE_JOB_NAME,
                                 wait: true,
                                 propagate: true,
                                 parameters: [
@@ -181,7 +192,7 @@ pipeline {
                                     string(name: 'GITOPS_BRANCH',             value: params.GITOPS_BRANCH),
                                     string(name: 'REPO_CREDENTIALS_ID',       value: svc.repoCredentialsId ?: ''),
                                     booleanParam(name: 'ENABLE_TRIVY_SCAN',   value: params.ENABLE_TRIVY_SCAN),
-                                    booleanParam(name: 'ENABLE_GITOPS_UPDATE',value: true),
+                                    booleanParam(name: 'ENABLE_GITOPS_UPDATE',value: params.ENABLE_GITOPS_UPDATE),
                                     booleanParam(name: 'ROLLBACK_MODE',       value: params.ROLLBACK_MODE)
                                 ]
                             echo "=== ${svc.name}: deployed successfully ==="

@@ -1,0 +1,35 @@
+[
+  {
+    "name": "config-server",
+    "serviceType": "internal",
+    "repoUrl": "https://github.com/Vuthy-Tourn/flower-config-server",
+    "branch": "main",
+    "repoCredentialsId": "",
+    "framework": "",
+    "appPort": "8888",
+    "imageTag": "",
+    "envJson": "[]",
+    "relationships": [],
+    "dependsOn": []
+  },
+  {
+    "name": "api-gateway",
+    "serviceType": "gateway",
+    "repoUrl": "https://github.com/Vuthy-Tourn/flower-config-server",
+    "branch": "main",
+    "repoCredentialsId": "",
+    "framework": "",
+    "appPort": "8080",
+    "imageTag": "",
+    "envJson": "[]",
+    "relationships": [
+      {
+        "name": "CONFIG_SERVER_URL",
+        "value": "http://config-server.user-test.svc.cluster.local:8888"
+      }
+    ],
+    "dependsOn": [
+      "config-server"
+    ]
+  }
+]
