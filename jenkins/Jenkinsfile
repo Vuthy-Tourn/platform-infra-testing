@@ -222,20 +222,12 @@ pipeline {
                             exit 1
                         fi
 
-                        case "$FRAMEWORK" in
-                          springboot-*)
-                            echo "Using platform-managed Spring Boot Dockerfile template."
-                            FORCE_PLATFORM_DOCKERFILE=true bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
-                            ;;
-                          *)
-                            if [ -f Dockerfile ]; then
-                                echo "Using user-provided Dockerfile."
-                            else
-                                echo "Generating Dockerfile from platform template."
-                                bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
-                            fi
-                            ;;
-                        esac
+                        if [ -f Dockerfile ]; then
+                            echo "Using user-provided Dockerfile."
+                        else
+                            echo "Generating Dockerfile from platform template for ${FRAMEWORK}."
+                            bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
+                        fi
                     '''
                 }
             }
@@ -292,20 +284,12 @@ pipeline {
                                 exit 1
                             fi
 
-                            case "$FRAMEWORK" in
-                              springboot-*)
-                                echo "Using platform-managed Spring Boot Dockerfile template."
-                                FORCE_PLATFORM_DOCKERFILE=true bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
-                                ;;
-                              *)
-                                if [ -f Dockerfile ]; then
-                                    echo "Using user-provided Dockerfile."
-                                else
-                                    echo "Generating Dockerfile from platform template."
-                                    bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
-                                fi
-                                ;;
-                            esac
+                            if [ -f Dockerfile ]; then
+                                echo "Using user-provided Dockerfile."
+                            else
+                                echo "Generating Dockerfile from platform template for ${FRAMEWORK}."
+                                bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
+                            fi
                         '''
                     }
 
@@ -334,7 +318,7 @@ pipeline {
 
                 // 3. Push — always runs after scan (scan failures call error() and stop execution)
                 withCredentials([usernamePassword(
-                    credentialsId: 'registry-credentials',
+                    credentialsId: 'dockerhub-credentials',
                     usernameVariable: 'REGISTRY_USERNAME',
                     passwordVariable: 'REGISTRY_PASSWORD'
                 )]) {
