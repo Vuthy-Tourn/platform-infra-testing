@@ -33,7 +33,7 @@ pipeline {
 
     environment {
         INFRA_REPO_URL = credentials('infra-repo-url')
-        REGISTRY_REPOSITORY = credentials('dockerhub-credentials')
+        REGISTRY_REPOSITORY = credentials('registry-repository'')
         GITOPS_REPO_URL = credentials('gitops-repo-url')
     }
 
