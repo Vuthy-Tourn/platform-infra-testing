@@ -1,5 +1,4 @@
 @Library('share_lib@master') _
-
 /**
  * Microservices Orchestrator Pipeline
  *
@@ -151,7 +150,7 @@ pipeline {
                     def ordered = topologicalSort(services)
                     env.ORDERED_SERVICE_NAMES = ordered.collect { it.name }.join(',')
                     // Store full sorted list as JSON for downstream use
-                    env.ORDERED_SERVICES_JSON = writeJSON returnText: true, json: ordered
+                    env.ORDERED_SERVICES_JSON = writeJSON(returnText: true, json: ordered)
 
                     echo "Deploy order: ${env.ORDERED_SERVICE_NAMES}"
                 }
@@ -290,5 +289,5 @@ def mergeEnvAndRelationships(String envJson, List relationships) {
     relVars.each   { v -> merged[v.name] = v.value }
 
     def result = merged.collect { k, v -> [name: k, value: v] }
-    return writeJSON returnText: true, json: result
+    return writeJSON(returnText: true, json: result)
 }
