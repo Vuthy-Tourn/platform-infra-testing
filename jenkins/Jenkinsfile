@@ -294,7 +294,7 @@ pipeline {
                     }
 
                     withCredentials([usernamePassword(
-                        credentialsId: 'registry-credentials',
+                        credentialsId: 'dockerhub-credentials',
                         usernameVariable: 'REGISTRY_USERNAME',
                         passwordVariable: 'REGISTRY_PASSWORD'
                     )]) {
