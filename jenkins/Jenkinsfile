@@ -293,6 +293,18 @@ pipeline {
                         '''
                     }
 
+                    withCredentials([usernamePassword(
+                        credentialsId: 'registry-credentials',
+                        usernameVariable: 'REGISTRY_USERNAME',
+                        passwordVariable: 'REGISTRY_PASSWORD'
+                    )]) {
+                        sh '''
+                            echo "[auth] Logging in to ${REGISTRY_LOGIN_SERVER} before build"
+                            echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
+                                -u "${REGISTRY_USERNAME}" --password-stdin
+                        '''
+                    }
+
                     // Build
                     dir('user-app') {
                         sh '''
