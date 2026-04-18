@@ -1,5 +1,3 @@
-@Library('share_lib@master') _
-
 pipeline {
     agent any
 
@@ -68,10 +66,14 @@ pipeline {
                     }
 
                     def normalizedRegistry = (env.REGISTRY_REPOSITORY ?: '')
+                        .trim()
                         .replaceFirst(/^https?:\/\//, '')
+                        .replaceFirst(/^docker\.io\//, '')
+                        .replaceFirst(/^index\.docker\.io\//, '')
+                        .replaceFirst(/^registry-1\.docker\.io\//, '')
                         .replaceAll(/\/+$/, '')
                     if (!normalizedRegistry) {
-                        error('REGISTRY_REPOSITORY is required')
+                        error('REGISTRY_REPOSITORY must be your Docker Hub namespace, for example "vuthytourn"')
                     }
 
                     echo "ENABLE_GITOPS_UPDATE=${params.ENABLE_GITOPS_UPDATE} | GITOPS_BRANCH=${params.GITOPS_BRANCH} | WORKSPACE_ID=${env.EFFECTIVE_WORKSPACE_ID} | CUSTOM_DOMAIN=${params.CUSTOM_DOMAIN}"
@@ -89,31 +91,13 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    def registryParts = normalizedRegistry.tokenize('/')
-                    def firstRegistryPart = registryParts ? registryParts[0] : ''
-                    def hostLikeRegistry = firstRegistryPart.contains('.') || firstRegistryPart.contains(':') || firstRegistryPart == 'localhost'
-                    def dockerHubMode = !hostLikeRegistry || ['docker.io', 'index.docker.io', 'registry-1.docker.io'].contains(firstRegistryPart)
-
-                    if (dockerHubMode) {
-                        def dockerHubNamespace = ['docker.io', 'index.docker.io', 'registry-1.docker.io'].contains(firstRegistryPart)
-                            ? (registryParts.size() > 1 ? registryParts[1] : '')
-                            : firstRegistryPart
-                        if (!dockerHubNamespace) {
-                            error('For Docker Hub, REGISTRY_REPOSITORY must be your namespace, for example "your-dockerhub-user" or "docker.io/your-dockerhub-user"')
-                        }
-
-                        env.NORMALIZED_REGISTRY_REPOSITORY = "docker.io/${dockerHubNamespace}"
-                        env.REGISTRY_LOGIN_SERVER = 'docker.io'
-                        env.IMAGE_REPOSITORY = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_PROJECT_NAME}"
-                    } else {
-                        if (registryParts.size() < 2) {
-                            error('For private registries, REGISTRY_REPOSITORY must include registry host and project, for example "harbor.example.com/platform"')
-                        }
-
-                        env.NORMALIZED_REGISTRY_REPOSITORY = normalizedRegistry
-                        env.REGISTRY_LOGIN_SERVER = firstRegistryPart
-                        env.IMAGE_REPOSITORY = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_USER_ID}/${env.SAFE_PROJECT_NAME}"
+                    if (normalizedRegistry.contains(':') || normalizedRegistry.contains('.')) {
+                        error('REGISTRY_REPOSITORY must be only your Docker Hub namespace, for example "vuthytourn"')
                     }
+
+                    env.NORMALIZED_REGISTRY_REPOSITORY = "docker.io/${normalizedRegistry}"
+                    env.REGISTRY_LOGIN_SERVER = 'docker.io'
+                    env.IMAGE_REPOSITORY = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_PROJECT_NAME}"
                     if (params.IMAGE_TAG?.trim()) {
                         env.IMAGE_TAG = params.IMAGE_TAG.trim()
                     }
@@ -334,26 +318,18 @@ pipeline {
                         '''
                     }
 
-                // 2. Scan (conditional — but does NOT gate the push on its own)
+                // 2. Scan (conditional). The test copy avoids the external Jenkins shared library
+                // and runs a lightweight local Trivy check when the binary is available.
                 if (params.ENABLE_TRIVY_SCAN) {
-                    echo "[scan] Starting Trivy scan for ${env.IMAGE_FULL}"
-                    trivyScan(
-                        fullImage: env.IMAGE_FULL,
-                        trivyPath: '/home/enz/trivy/docker-compose.yml',
-                        reportPath: '/home/enz/trivy/reports/trivy-report.json',
-                        gateSeverity: 'HIGH,CRITICAL'
-                    )
-                    echo "[scan] Trivy scan completed, uploading to DefectDojo"
-                    uploadDefectDojo(
-                        defectdojoUrl: 'https://defectdojo.devith.it.com',
-                        defectdojoCredentialId: 'DEFECTDOJO',
-                        reportPath: '/home/enz/trivy/reports/trivy-report.json',
-                        productTypeName: 'Web Applications',
-                        productName: env.EFFECTIVE_PROJECT_NAME,
-                        engagementName: "Jenkins-${env.BUILD_NUMBER}",
-                        testTitle: "Trivy Image Scan - ${env.IMAGE_TAG}"
-                    )
-                    echo "[scan] DefectDojo upload completed"
+                    sh '''
+                        if command -v trivy >/dev/null 2>&1; then
+                            echo "[scan] Starting local Trivy scan for ${IMAGE_FULL}"
+                            trivy image --severity HIGH,CRITICAL --exit-code 1 "${IMAGE_FULL}"
+                            echo "[scan] Trivy scan completed"
+                        else
+                            echo "[scan] Trivy is not installed on this Jenkins agent. Skipping scan in test mode."
+                        fi
+                    '''
                 }
 
                 // 3. Push — always runs after scan (scan failures call error() and stop execution)
