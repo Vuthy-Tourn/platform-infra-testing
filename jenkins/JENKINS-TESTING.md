@@ -44,6 +44,8 @@ This test copy is wired so the orchestrator defaults to calling `deploy-service-
 - `infra-repo-url` as Secret text
 - `infra-repo-creds` as Git credentials
 - `registry-repository` as Secret text
+  - Harbor/private registry example: `harbor.example.com/platform`
+  - Docker Hub example: `your-dockerhub-user` or `docker.io/your-dockerhub-user`
 - `registry-credentials` as Username with password
 - `gitops-repo-url` as Secret text
 - `gitops-ssh` as SSH private key

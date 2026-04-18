@@ -70,8 +70,8 @@ pipeline {
                     def normalizedRegistry = (env.REGISTRY_REPOSITORY ?: '')
                         .replaceFirst(/^https?:\/\//, '')
                         .replaceAll(/\/+$/, '')
-                    if (!normalizedRegistry.contains('/')) {
-                        error('REGISTRY_REPOSITORY must include registry host and Harbor project (example: harbor.devith.it.com/deployment-pipeline)')
+                    if (!normalizedRegistry) {
+                        error('REGISTRY_REPOSITORY is required')
                     }
 
                     echo "ENABLE_GITOPS_UPDATE=${params.ENABLE_GITOPS_UPDATE} | GITOPS_BRANCH=${params.GITOPS_BRANCH} | WORKSPACE_ID=${env.EFFECTIVE_WORKSPACE_ID} | CUSTOM_DOMAIN=${params.CUSTOM_DOMAIN}"
@@ -89,17 +89,31 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    env.NORMALIZED_REGISTRY_REPOSITORY = sh(
-                        script: '''echo "$REGISTRY_REPOSITORY" | sed -E 's#^https?://##; s#/*$##' ''',
-                        returnStdout: true
-                    ).trim()
+                    def registryParts = normalizedRegistry.tokenize('/')
+                    def firstRegistryPart = registryParts ? registryParts[0] : ''
+                    def hostLikeRegistry = firstRegistryPart.contains('.') || firstRegistryPart.contains(':') || firstRegistryPart == 'localhost'
+                    def dockerHubMode = !hostLikeRegistry || ['docker.io', 'index.docker.io', 'registry-1.docker.io'].contains(firstRegistryPart)
 
-                    env.REGISTRY_LOGIN_SERVER = sh(
-                        script: '''echo "$REGISTRY_REPOSITORY" | sed -E 's#^https?://##' | cut -d/ -f1''',
-                        returnStdout: true
-                    ).trim()
+                    if (dockerHubMode) {
+                        def dockerHubNamespace = ['docker.io', 'index.docker.io', 'registry-1.docker.io'].contains(firstRegistryPart)
+                            ? (registryParts.size() > 1 ? registryParts[1] : '')
+                            : firstRegistryPart
+                        if (!dockerHubNamespace) {
+                            error('For Docker Hub, REGISTRY_REPOSITORY must be your namespace, for example "your-dockerhub-user" or "docker.io/your-dockerhub-user"')
+                        }
 
-                    env.IMAGE_REPOSITORY = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_USER_ID}/${env.SAFE_PROJECT_NAME}"
+                        env.NORMALIZED_REGISTRY_REPOSITORY = "docker.io/${dockerHubNamespace}"
+                        env.REGISTRY_LOGIN_SERVER = 'docker.io'
+                        env.IMAGE_REPOSITORY = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_PROJECT_NAME}"
+                    } else {
+                        if (registryParts.size() < 2) {
+                            error('For private registries, REGISTRY_REPOSITORY must include registry host and project, for example "harbor.example.com/platform"')
+                        }
+
+                        env.NORMALIZED_REGISTRY_REPOSITORY = normalizedRegistry
+                        env.REGISTRY_LOGIN_SERVER = firstRegistryPart
+                        env.IMAGE_REPOSITORY = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_USER_ID}/${env.SAFE_PROJECT_NAME}"
+                    }
                     if (params.IMAGE_TAG?.trim()) {
                         env.IMAGE_TAG = params.IMAGE_TAG.trim()
                     }
