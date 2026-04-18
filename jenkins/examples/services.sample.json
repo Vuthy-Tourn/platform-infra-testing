@@ -15,7 +15,7 @@
   {
     "name": "api-gateway",
     "serviceType": "gateway",
-    "repoUrl": "https://github.com/Vuthy-Tourn/flower-config-server",
+    "repoUrl": "https://github.com/Vuthy-Tourn/flower-gateway-server",
     "branch": "main",
     "repoCredentialsId": "",
     "framework": "",
