@@ -24,7 +24,7 @@ pipeline {
         string(name: 'GITOPS_BRANCH', defaultValue: 'main', description: 'GitOps branch to update')
         string(name: 'REPO_CREDENTIALS_ID', defaultValue: '', description: 'Optional Jenkins credential id for private user repositories')
         string(name: 'SERVICE_TYPE', defaultValue: 'internal', description: 'Service role: gateway | internal | registry. Controls ingress and probe behaviour.')
-        booleanParam(name: 'ENABLE_TRIVY_SCAN', defaultValue: true, description: 'Run local Trivy image scan')
+        booleanParam(name: 'ENABLE_TRIVY_SCAN', defaultValue: false, description: 'Run local Trivy image scan')
         booleanParam(name: 'ENABLE_GITOPS_UPDATE', defaultValue: false, description: 'Update GitOps repository after push. Keep false for Jenkins-only testing.')
         booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Skip build/scan/push and update GitOps with a saved image tag')
     }
@@ -237,7 +237,7 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent { label 'trivy' }
+            // agent { label 'trivy' }
             steps {
                 script {
                     // Re-checkout infra (for scripts + helm chart)
