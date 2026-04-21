@@ -6,10 +6,12 @@ usage() {
 Usage: update-gitops.sh \
   --gitops-repo <ssh-url> \
   --gitops-branch <branch> \
+  --gitops-workdir <path> \
   --infra-repo <repo-url> \
   --infra-revision <revision> \
   --chart-path <path> \
   --ssh-key <path> \
+  --skip-push <true|false> \
   --operation <deploy|rollback> \
   --workspace-id <workspace-id> \
   --user-id <user-id> \
@@ -373,10 +375,12 @@ commit_and_push() {
 
 GITOPS_REPO=""
 GITOPS_BRANCH="main"
+GITOPS_WORKDIR=""
 INFRA_REPO=""
 INFRA_REVISION="main"
 CHART_PATH="helm/app-template"
 SSH_KEY=""
+SKIP_PUSH="false"
 OPERATION="deploy"
 WORKSPACE_ID=""
 USER_ID=""
@@ -402,6 +406,10 @@ while [[ $# -gt 0 ]]; do
       GITOPS_BRANCH="$2"
       shift 2
       ;;
+    --gitops-workdir)
+      GITOPS_WORKDIR="$2"
+      shift 2
+      ;;
     --infra-repo)
       INFRA_REPO="$2"
       shift 2
@@ -416,6 +424,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --ssh-key)
       SSH_KEY="$2"
+      shift 2
+      ;;
+    --skip-push)
+      SKIP_PUSH="$2"
       shift 2
       ;;
     --operation)
@@ -486,13 +498,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for required in GITOPS_REPO INFRA_REPO SSH_KEY USER_ID PROJECT_NAME IMAGE_REPOSITORY IMAGE_TAG APP_PORT PLATFORM_DOMAIN FRAMEWORK COMMIT_SHA BUILD_NUMBER; do
+for required in GITOPS_REPO INFRA_REPO USER_ID PROJECT_NAME IMAGE_REPOSITORY IMAGE_TAG APP_PORT PLATFORM_DOMAIN FRAMEWORK COMMIT_SHA BUILD_NUMBER; do
   if [[ -z "${!required}" ]]; then
     echo "Missing required argument: ${required}" >&2
     usage
     exit 1
   fi
 done
+
+if [[ "${SKIP_PUSH}" != "true" && "${SKIP_PUSH}" != "false" ]]; then
+  echo "SKIP_PUSH must be 'true' or 'false'" >&2
+  exit 1
+fi
 
 if [[ -z "${INFRA_REVISION}" ]]; then
   echo "INFRA_REVISION must not be empty" >&2
@@ -526,19 +543,28 @@ if [[ -n "${CUSTOM_DOMAIN}" ]]; then
   fi
 fi
 
-if [[ ! -f "${SSH_KEY}" ]]; then
-  echo "SSH key file not found: ${SSH_KEY}" >&2
-  echo "Verify Jenkins credential 'gitops-ssh' is configured as 'SSH Username with private key'." >&2
-  exit 1
+if [[ -n "${GITOPS_WORKDIR}" ]]; then
+  if [[ ! -d "${GITOPS_WORKDIR}" ]]; then
+    echo "GitOps workdir not found: ${GITOPS_WORKDIR}" >&2
+    exit 1
+  fi
 fi
 
-chmod 600 "${SSH_KEY}" || true
+if [[ -z "${GITOPS_WORKDIR}" || "${SKIP_PUSH}" != "true" ]]; then
+  if [[ ! -f "${SSH_KEY}" ]]; then
+    echo "SSH key file not found: ${SSH_KEY}" >&2
+    echo "Verify Jenkins credential 'gitops-ssh' is configured as 'SSH Username with private key'." >&2
+    exit 1
+  fi
 
-if ! ssh-keygen -y -f "${SSH_KEY}" >/dev/null 2>&1; then
-  echo "Invalid SSH private key provided by Jenkins credential 'gitops-ssh'." >&2
-  echo "Expected a real private key (OpenSSH/PEM), not a GitHub token/password." >&2
-  echo "Use username 'git' and paste the private key content in Jenkins credentials." >&2
-  exit 1
+  chmod 600 "${SSH_KEY}" || true
+
+  if ! ssh-keygen -y -f "${SSH_KEY}" >/dev/null 2>&1; then
+    echo "Invalid SSH private key provided by Jenkins credential 'gitops-ssh'." >&2
+    echo "Expected a real private key (OpenSSH/PEM), not a GitHub token/password." >&2
+    echo "Use username 'git' and paste the private key content in Jenkins credentials." >&2
+    exit 1
+  fi
 fi
 
 # If Jenkins stores GitHub repo as HTTPS but we authenticate via SSH key,
@@ -558,28 +584,17 @@ if [[ -n "${CUSTOM_DOMAIN}" ]]; then
   EFFECTIVE_HOST="${CUSTOM_DOMAIN}"
 fi
 
-export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+if [[ -n "${SSH_KEY}" ]]; then
+  export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+fi
 
-MAX_ATTEMPTS=5
-ATTEMPT=1
+write_gitops_state() {
+  local repo_dir="$1"
 
-while [[ "${ATTEMPT}" -le "${MAX_ATTEMPTS}" ]]; do
-  WORK_DIR="$(mktemp -d)"
-
-  cleanup() {
-    cd /tmp || true
-    rm -rf "${WORK_DIR}"
-  }
-  trap cleanup EXIT
-
-  echo "[GitOps] Attempt ${ATTEMPT}/${MAX_ATTEMPTS}: cloning ${GITOPS_REPO}"
-  git clone --branch "${GITOPS_BRANCH}" --depth 1 "${GITOPS_REPO}" "${WORK_DIR}/gitops" >/dev/null
-
-  REPO_DIR="${WORK_DIR}/gitops"
   LEGACY_APP_ROOT="apps/${SAFE_USER_ID}/${SAFE_PROJECT_NAME}"
   NEW_APP_ROOT="apps/${SAFE_WORKSPACE_ID}/${SAFE_USER_ID}/${SAFE_PROJECT_NAME}"
 
-  if [[ -d "${REPO_DIR}/${LEGACY_APP_ROOT}" && ! -d "${REPO_DIR}/${NEW_APP_ROOT}" ]]; then
+  if [[ -d "${repo_dir}/${LEGACY_APP_ROOT}" && ! -d "${repo_dir}/${NEW_APP_ROOT}" ]]; then
     APP_ROOT="${LEGACY_APP_ROOT}"
     USER_ROOT="apps/${SAFE_USER_ID}"
     echo "[GitOps] Legacy layout detected, writing to ${APP_ROOT}"
@@ -589,13 +604,13 @@ while [[ "${ATTEMPT}" -le "${MAX_ATTEMPTS}" ]]; do
   fi
 
   NAMESPACE_FILE="${USER_ROOT}/namespace.yaml"
-  PROJECT_DIR="${REPO_DIR}/${APP_ROOT}"
+  PROJECT_DIR="${repo_dir}/${APP_ROOT}"
   VALUES_FILE="${PROJECT_DIR}/values.yaml"
   APPLICATION_FILE="${PROJECT_DIR}/application.yaml"
 
-  mkdir -p "${PROJECT_DIR}" "${REPO_DIR}/${USER_ROOT}"
+  mkdir -p "${PROJECT_DIR}" "${repo_dir}/${USER_ROOT}"
 
-  ensure_namespace_manifest "${REPO_DIR}/${USER_ROOT}" "${NAMESPACE}"
+  ensure_namespace_manifest "${repo_dir}/${USER_ROOT}" "${NAMESPACE}"
 
   create_values_file "${VALUES_FILE}" "${SAFE_WORKSPACE_ID}" "${SAFE_USER_ID}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${FRAMEWORK}" "${IMAGE_REPOSITORY}" "${IMAGE_TAG}" "${APP_PORT}" "${PLATFORM_DOMAIN}" "${CUSTOM_DOMAIN}" "${ENV_JSON}" "${SERVICE_TYPE}"
 
@@ -618,6 +633,33 @@ while [[ "${ATTEMPT}" -le "${MAX_ATTEMPTS}" ]]; do
       exit 1
     }
   fi
+}
+
+if [[ -n "${GITOPS_WORKDIR}" ]]; then
+  write_gitops_state "${GITOPS_WORKDIR}"
+  if [[ "${SKIP_PUSH}" == "true" ]]; then
+    echo "GitOps state written to ${GITOPS_WORKDIR} without committing."
+    exit 0
+  fi
+fi
+
+MAX_ATTEMPTS=5
+ATTEMPT=1
+
+while [[ "${ATTEMPT}" -le "${MAX_ATTEMPTS}" ]]; do
+  WORK_DIR="$(mktemp -d)"
+
+  cleanup() {
+    cd /tmp || true
+    rm -rf "${WORK_DIR}"
+  }
+  trap cleanup EXIT
+
+  echo "[GitOps] Attempt ${ATTEMPT}/${MAX_ATTEMPTS}: cloning ${GITOPS_REPO}"
+  git clone --branch "${GITOPS_BRANCH}" --depth 1 "${GITOPS_REPO}" "${WORK_DIR}/gitops" >/dev/null
+
+  REPO_DIR="${WORK_DIR}/gitops"
+  write_gitops_state "${REPO_DIR}"
 
   if [[ "${OPERATION}" == "rollback" ]]; then
     COMMIT_MESSAGE="rollback(${SAFE_USER_ID}/${SAFE_PROJECT_NAME}): image=${IMAGE_REPOSITORY}:${IMAGE_TAG} build=${BUILD_NUMBER} sha=${COMMIT_SHA}"

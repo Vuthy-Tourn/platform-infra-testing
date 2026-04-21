@@ -1,113 +1,44 @@
-@Library('share_lib@master') _
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurperClassic
+
 /**
  * Microservices Orchestrator Pipeline
  *
- * Called ONCE by the backend per workspace deployment.
- * Receives the full service topology as JSON, resolves deployment order,
- * and triggers Jenkinsfile-service per service in sequence.
+ * Best-practice test flow:
+ *   1. Resolve one release plan for all services.
+ *   2. Build / scan / push each service independently.
+ *   3. If GitOps is enabled, batch all service manifest updates into one commit.
  *
- * Backend responsibility:
- *   - Scan mono/multi repo and detect services
- *   - Build the topology + relationship graph
- *   - Resolve internal K8s URLs for each service
- *   - Call this pipeline with the resolved SERVICES_JSON
- *
- * This pipeline responsibility:
- *   - Validate the topology
- *   - Topological sort (deploy dependencies first)
- *   - Trigger each service pipeline in order
- *   - Report overall status back
+ * This keeps one service per deployable unit while avoiding one GitOps push per service.
  */
-
 pipeline {
     agent any
 
     options {
-        timeout(time: 60, unit: 'MINUTES')
+        timeout(time: 90, unit: 'MINUTES')
         timestamps()
         buildDiscarder(logRotator(numToKeepStr: '30'))
     }
 
     parameters {
-        string(
-            name: 'USER_ID',
-            defaultValue: '',
-            description: 'Tenant user ID'
-        )
-        string(
-            name: 'WORKSPACE_ID',
-            defaultValue: '',
-            description: 'Workspace ID / slug'
-        )
-        string(
-            name: 'PLATFORM_DOMAIN',
-            defaultValue: 'apps.example.com',
-            description: 'Wildcard platform domain'
-        )
-        string(
-            name: 'GITOPS_BRANCH',
-            defaultValue: 'main',
-            description: 'GitOps branch to update'
-        )
-        string(
-            name: 'SERVICE_JOB_NAME',
-            defaultValue: 'deploy-service-test',
-            description: 'Jenkins job name used to deploy one service'
-        )
-        booleanParam(
-            name: 'ENABLE_TRIVY_SCAN',
-            defaultValue: true,
-            description: 'Run Trivy scan on each service image'
-        )
-        booleanParam(
-            name: 'ENABLE_GITOPS_UPDATE',
-            defaultValue: false,
-            description: 'Update GitOps repository for each service. Keep false for Jenkins-only testing.'
-        )
-        booleanParam(
-            name: 'ROLLBACK_MODE',
-            defaultValue: false,
-            description: 'Rollback all services to saved image tags'
-        )
-        /*
-         * SERVICES_JSON — provided by backend, never typed by hand.
-         *
-         * Schema:
-         * [
-         *   {
-         *     "name": "api-gateway",
-         *     "serviceType": "gateway",          // gateway | internal | registry
-         *     "repoUrl": "https://github.com/org/api-gateway.git",
-         *     "branch": "main",
-         *     "repoCredentialsId": "",           // optional Jenkins credential ID
-         *     "framework": "",                   // optional override; blank = auto-detect
-         *     "appPort": "8080",
-         *     "imageTag": "",                    // optional; for rollback
-         *     "envJson": "[]",                   // user-supplied env vars
-         *     "relationships": [                 // resolved by backend
-         *       { "name": "ORDER_SERVICE_URL",
-         *         "value": "http://order-service.user-abc.svc.cluster.local" }
-         *     ],
-         *     "dependsOn": ["config-server", "eureka"]  // deploy order hint
-         *   },
-         *   ...
-         * ]
-         */
-        string(
-            name: 'SERVICES_JSON',
-            defaultValue: '[]',
-            description: 'JSON array of service descriptors (backend-provided)'
-        )
+        string(name: 'USER_ID', defaultValue: '', description: 'Tenant user ID')
+        string(name: 'WORKSPACE_ID', defaultValue: '', description: 'Workspace ID / slug')
+        string(name: 'PLATFORM_DOMAIN', defaultValue: 'apps.example.com', description: 'Wildcard platform domain')
+        string(name: 'GITOPS_BRANCH', defaultValue: 'main', description: 'GitOps branch to update')
+        string(name: 'SERVICE_JOB_NAME', defaultValue: 'deploy-service-test', description: 'Jenkins job name used to deploy one service')
+        booleanParam(name: 'ENABLE_TRIVY_SCAN', defaultValue: true, description: 'Run Trivy scan on each service image')
+        booleanParam(name: 'ENABLE_GITOPS_UPDATE', defaultValue: false, description: 'Update GitOps repository once after all service builds succeed')
+        booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Rollback all services to saved image tags')
+        string(name: 'SERVICES_JSON', defaultValue: '[]', description: 'JSON array of service descriptors (backend-provided)')
     }
 
     environment {
-        INFRA_REPO_URL          = credentials('infra-repo-url')
-        REGISTRY_REPOSITORY     = credentials('registry-repository')
-        GITOPS_REPO_URL         = credentials('gitops-repo-url')
+        INFRA_REPO_URL      = credentials('infra-repo-url')
+        REGISTRY_REPOSITORY = credentials('registry-repository')
+        GITOPS_REPO_URL     = credentials('gitops-repo-url')
     }
 
     stages {
-
         stage('Validate') {
             steps {
                 script {
@@ -120,7 +51,7 @@ pipeline {
 
                     def services
                     try {
-                        services = readJSON text: params.SERVICES_JSON
+                        services = parseJson(params.SERVICES_JSON)
                     } catch (Exception e) {
                         error("SERVICES_JSON is not valid JSON: ${e.message}")
                     }
@@ -130,13 +61,62 @@ pipeline {
                     }
 
                     services.each { svc ->
-                        if (!svc.name?.trim())    error("Service entry missing 'name': ${svc}")
-                        if (!svc.repoUrl?.trim()) error("Service '${svc.name}' missing 'repoUrl'")
+                        if (!svc.name?.toString()?.trim()) {
+                            error("Service entry missing 'name': ${svc}")
+                        }
+                        if (!params.ROLLBACK_MODE && !svc.repoUrl?.toString()?.trim()) {
+                            error("Service '${svc.name}' missing 'repoUrl'")
+                        }
+                        if (params.ROLLBACK_MODE && !svc.imageTag?.toString()?.trim()) {
+                            error("Service '${svc.name}' missing 'imageTag' for rollback")
+                        }
+                        if (params.ROLLBACK_MODE && !svc.framework?.toString()?.trim()) {
+                            error("Service '${svc.name}' missing 'framework' for rollback")
+                        }
                     }
 
                     env.EFFECTIVE_WORKSPACE_ID = params.WORKSPACE_ID?.trim() ?: params.USER_ID.trim()
+                    env.SAFE_USER_ID = slugify(params.USER_ID, 30)
+                    env.SAFE_WORKSPACE_ID = slugify(env.EFFECTIVE_WORKSPACE_ID, 30)
+
+                    def registryContext = resolveRegistryContext(env.REGISTRY_REPOSITORY ?: '')
+                    env.NORMALIZED_REGISTRY_REPOSITORY = registryContext.repositoryRoot
+                    env.REGISTRY_LOGIN_SERVER = registryContext.loginServer
+                    env.DOCKER_HUB_MODE = registryContext.dockerHubMode.toString()
+
                     echo "Validated ${services.size()} service(s) for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
                     echo "Downstream service job: ${params.SERVICE_JOB_NAME}"
+                }
+            }
+        }
+
+        stage('Checkout infra') {
+            steps {
+                dir('platform-infra') {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        userRemoteConfigs: [[
+                            url: env.INFRA_REPO_URL,
+                            credentialsId: 'infra-repo-creds'
+                        ]]
+                    ])
+                }
+                script {
+                    env.INFRA_SCRIPTS_DIR = sh(
+                        script: '''
+                            set -e
+                            for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
+                                if [ -f "$d/detect-framework.sh" ]; then
+                                    echo "$d"
+                                    exit 0
+                                fi
+                            done
+                            echo "ERROR: infra Jenkins scripts directory not found." >&2
+                            exit 1
+                        ''',
+                        returnStdout: true
+                    ).trim()
                 }
             }
         }
@@ -144,66 +124,199 @@ pipeline {
         stage('Resolve deploy order') {
             steps {
                 script {
-                    def services = readJSON text: params.SERVICES_JSON
-
-                    // Topological sort by dependsOn
+                    def services = parseJson(params.SERVICES_JSON)
                     def ordered = topologicalSort(services)
                     env.ORDERED_SERVICE_NAMES = ordered.collect { it.name }.join(',')
-                    // Store full sorted list as JSON for downstream use
-                    env.ORDERED_SERVICES_JSON = writeJSON(returnText: true, json: ordered)
-
+                    env.ORDERED_SERVICES_JSON = toJsonText(ordered)
                     echo "Deploy order: ${env.ORDERED_SERVICE_NAMES}"
                 }
             }
         }
 
-        stage('Deploy services') {
+        stage('Prepare release plan') {
             steps {
                 script {
-                    def services = readJSON text: env.ORDERED_SERVICES_JSON
+                    def services = parseJson(env.ORDERED_SERVICES_JSON)
+                    def plannedServices = []
+
+                    services.eachWithIndex { svc, index ->
+                        def serviceName = svc.name.toString().trim()
+                        def safeProjectName = slugify(serviceName, 40)
+                        def imageRepository = buildImageRepository(
+                            env.NORMALIZED_REGISTRY_REPOSITORY,
+                            safeProjectName,
+                            env.SAFE_USER_ID,
+                            env.DOCKER_HUB_MODE?.toBoolean()
+                        )
+
+                        def branch = svc.branch?.toString()?.trim() ?: 'main'
+                        def frameworkOverride = svc.framework?.toString()?.trim() ?: ''
+                        def metadata = params.ROLLBACK_MODE
+                            ? [
+                                commitSha: "rollback-${svc.imageTag.toString().trim()}",
+                                framework: frameworkOverride
+                            ]
+                            : resolveCommitAndFramework(
+                                svc,
+                                branch,
+                                safeProjectName,
+                                index,
+                                frameworkOverride
+                            )
+                        def commitSha = metadata.commitSha
+                        def framework = metadata.framework
+                        def imageTag = svc.imageTag?.toString()?.trim()
+                            ? svc.imageTag.toString().trim()
+                            : "${env.SAFE_USER_ID}-${env.BUILD_NUMBER}-${commitSha}"
+
+                        plannedServices << [
+                            name               : serviceName,
+                            repoUrl            : svc.repoUrl?.toString()?.trim() ?: '',
+                            branch             : branch,
+                            repoCredentialsId  : svc.repoCredentialsId?.toString()?.trim() ?: '',
+                            framework          : framework,
+                            appPort            : svc.appPort?.toString()?.trim() ?: '8080',
+                            imageTag           : imageTag,
+                            envJson            : svc.envJson?.toString()?.trim() ?: '[]',
+                            relationships      : svc.relationships ?: [],
+                            dependsOn          : svc.dependsOn ?: [],
+                            serviceType        : svc.serviceType?.toString()?.trim() ?: 'internal',
+                            mergedEnvJson      : mergeEnvAndRelationships(
+                                svc.envJson?.toString()?.trim() ?: '[]',
+                                (svc.relationships ?: []) as List
+                            ),
+                            imageRepository    : imageRepository,
+                            commitSha          : commitSha,
+                            customDomain       : svc.customDomain?.toString()?.trim() ?: ''
+                        ]
+                    }
+
+                    env.PLANNED_SERVICES_JSON = toJsonText(plannedServices)
+                    echo "Prepared release plan for ${plannedServices.size()} service(s)"
+                }
+            }
+        }
+
+        stage('Build and push services') {
+            steps {
+                script {
+                    def services = parseJson(env.PLANNED_SERVICES_JSON)
                     def failures = []
 
                     services.each { svc ->
-                        echo "=== Deploying service: ${svc.name} (type: ${svc.serviceType ?: 'internal'}) ==="
-
-                        // Merge user envJson + resolved relationship URLs into one flat JSON array
-                        def mergedEnvJson = mergeEnvAndRelationships(
-                            svc.envJson ?: '[]',
-                            svc.relationships ?: []
-                        )
+                        echo "=== Building service: ${svc.name} (type: ${svc.serviceType}) ==="
 
                         try {
                             build job: params.SERVICE_JOB_NAME,
                                 wait: true,
                                 propagate: true,
                                 parameters: [
-                                    string(name: 'REPO_URL',                  value: svc.repoUrl),
-                                    string(name: 'BRANCH',                    value: svc.branch ?: 'main'),
-                                    string(name: 'USER_ID',                   value: params.USER_ID),
-                                    string(name: 'WORKSPACE_ID',              value: env.EFFECTIVE_WORKSPACE_ID),
-                                    string(name: 'PROJECT_NAME',              value: svc.name),
-                                    string(name: 'APP_PORT',                  value: svc.appPort ?: '8080'),
-                                    string(name: 'FRAMEWORK',                 value: svc.framework ?: ''),
-                                    string(name: 'IMAGE_TAG',                 value: svc.imageTag ?: ''),
-                                    string(name: 'ENV_JSON',                  value: mergedEnvJson),
-                                    string(name: 'SERVICE_TYPE',              value: svc.serviceType ?: 'internal'),
-                                    string(name: 'PLATFORM_DOMAIN',           value: params.PLATFORM_DOMAIN),
-                                    string(name: 'GITOPS_BRANCH',             value: params.GITOPS_BRANCH),
-                                    string(name: 'REPO_CREDENTIALS_ID',       value: svc.repoCredentialsId ?: ''),
-                                    booleanParam(name: 'ENABLE_TRIVY_SCAN',   value: params.ENABLE_TRIVY_SCAN),
-                                    booleanParam(name: 'ENABLE_GITOPS_UPDATE',value: params.ENABLE_GITOPS_UPDATE),
-                                    booleanParam(name: 'ROLLBACK_MODE',       value: params.ROLLBACK_MODE)
+                                    string(name: 'REPO_URL', value: svc.repoUrl),
+                                    string(name: 'BRANCH', value: svc.branch),
+                                    string(name: 'USER_ID', value: params.USER_ID),
+                                    string(name: 'WORKSPACE_ID', value: env.EFFECTIVE_WORKSPACE_ID),
+                                    string(name: 'PROJECT_NAME', value: svc.name),
+                                    string(name: 'APP_PORT', value: svc.appPort),
+                                    string(name: 'FRAMEWORK', value: svc.framework),
+                                    string(name: 'IMAGE_TAG', value: svc.imageTag),
+                                    string(name: 'ENV_JSON', value: svc.mergedEnvJson),
+                                    string(name: 'SERVICE_TYPE', value: svc.serviceType),
+                                    string(name: 'PLATFORM_DOMAIN', value: params.PLATFORM_DOMAIN),
+                                    string(name: 'GITOPS_BRANCH', value: params.GITOPS_BRANCH),
+                                    string(name: 'REPO_CREDENTIALS_ID', value: svc.repoCredentialsId),
+                                    booleanParam(name: 'ENABLE_TRIVY_SCAN', value: params.ENABLE_TRIVY_SCAN),
+                                    booleanParam(name: 'ENABLE_GITOPS_UPDATE', value: false),
+                                    booleanParam(name: 'ROLLBACK_MODE', value: params.ROLLBACK_MODE)
                                 ]
-                            echo "=== ${svc.name}: deployed successfully ==="
+                            echo "=== ${svc.name}: built successfully ==="
                         } catch (Exception e) {
                             echo "=== ${svc.name}: FAILED — ${e.message} ==="
                             failures << svc.name
-                            // Continue deploying other services; report all failures at end
                         }
                     }
 
                     if (failures) {
-                        error("The following services failed to deploy: ${failures.join(', ')}")
+                        error("The following services failed to build/deploy: ${failures.join(', ')}")
+                    }
+                }
+            }
+        }
+
+        stage('Update GitOps repository (batched)') {
+            when {
+                expression { return params.ENABLE_GITOPS_UPDATE }
+            }
+            steps {
+                script {
+                    def services = parseJson(env.PLANNED_SERVICES_JSON)
+                    def operation = params.ROLLBACK_MODE ? 'rollback' : 'deploy'
+                    def workspaceCommitMessage = "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
+
+                    withCredentials([sshUserPrivateKey(credentialsId: 'gitops-ssh', keyFileVariable: 'SSH_KEY')]) {
+                        sh '''
+                            set -e
+                            rm -rf "$WORKSPACE/gitops-batch"
+                            export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+                            git clone --branch "${GITOPS_BRANCH}" --depth 1 "${GITOPS_REPO_URL}" "$WORKSPACE/gitops-batch" >/dev/null
+                            git -C "$WORKSPACE/gitops-batch" config user.email "jenkins@platform.local"
+                            git -C "$WORKSPACE/gitops-batch" config user.name "Jenkins CI"
+                        '''
+
+                        services.each { svc ->
+                            withEnv([
+                                "BATCH_OPERATION=${operation}",
+                                "BATCH_PROJECT_NAME=${svc.name}",
+                                "BATCH_CUSTOM_DOMAIN=${svc.customDomain ?: ''}",
+                                "BATCH_ENV_JSON=${svc.mergedEnvJson}",
+                                "BATCH_IMAGE_REPOSITORY=${svc.imageRepository}",
+                                "BATCH_IMAGE_TAG=${svc.imageTag}",
+                                "BATCH_APP_PORT=${svc.appPort}",
+                                "BATCH_FRAMEWORK=${svc.framework}",
+                                "BATCH_SERVICE_TYPE=${svc.serviceType}",
+                                "BATCH_COMMIT_SHA=${svc.commitSha}"
+                            ]) {
+                                sh '''
+                                    set -e
+                                    bash "${INFRA_SCRIPTS_DIR}/update-gitops.sh" \
+                                      --gitops-repo "${GITOPS_REPO_URL}" \
+                                      --gitops-branch "${GITOPS_BRANCH}" \
+                                      --gitops-workdir "$WORKSPACE/gitops-batch" \
+                                      --infra-repo "${INFRA_REPO_URL}" \
+                                      --infra-revision "main" \
+                                      --chart-path "helm/app-template" \
+                                      --operation "${BATCH_OPERATION}" \
+                                      --workspace-id "${EFFECTIVE_WORKSPACE_ID}" \
+                                      --user-id "${USER_ID}" \
+                                      --project-name "${BATCH_PROJECT_NAME}" \
+                                      --custom-domain "${BATCH_CUSTOM_DOMAIN}" \
+                                      --env-json "${BATCH_ENV_JSON}" \
+                                      --image-repository "${BATCH_IMAGE_REPOSITORY}" \
+                                      --image-tag "${BATCH_IMAGE_TAG}" \
+                                      --app-port "${BATCH_APP_PORT}" \
+                                      --platform-domain "${PLATFORM_DOMAIN}" \
+                                      --framework "${BATCH_FRAMEWORK}" \
+                                      --service-type "${BATCH_SERVICE_TYPE}" \
+                                      --commit-sha "${BATCH_COMMIT_SHA}" \
+                                      --build-number "${BUILD_NUMBER}" \
+                                      --skip-push true
+                                '''
+                            }
+                        }
+
+                        withEnv(["BATCH_COMMIT_MESSAGE=${workspaceCommitMessage}"]) {
+                            sh '''
+                                set -e
+                                export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+                                cd "$WORKSPACE/gitops-batch"
+                                git add apps
+                                if git diff --cached --quiet; then
+                                  echo "No batched GitOps changes required."
+                                  exit 0
+                                fi
+                                git commit -m "${BATCH_COMMIT_MESSAGE}" >/dev/null
+                                git push origin "${GITOPS_BRANCH}" >/dev/null
+                            '''
+                        }
                     }
                 }
             }
@@ -212,10 +325,10 @@ pipeline {
 
     post {
         success {
-            echo "All services deployed successfully for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+            echo "All services processed successfully for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
         }
         failure {
-            echo "One or more services failed. Check individual service job logs."
+            echo "One or more services failed. Check orchestrator logs."
         }
         always {
             cleanWs()
@@ -223,17 +336,10 @@ pipeline {
     }
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-/**
- * Kahn's algorithm topological sort.
- * Services with no dependsOn are deployed first (e.g. config-server, eureka).
- * Cycles fall back to original order with a warning.
- */
 def topologicalSort(List services) {
     def nameToSvc = services.collectEntries { [(it.name): it] }
-    def inDegree  = services.collectEntries { [(it.name): 0] }
-    def graph     = services.collectEntries { [(it.name): []] }
+    def inDegree = services.collectEntries { [(it.name): 0] }
+    def graph = services.collectEntries { [(it.name): []] }
 
     services.each { svc ->
         (svc.dependsOn ?: []).each { dep ->
@@ -246,7 +352,7 @@ def topologicalSort(List services) {
         }
     }
 
-    def queue   = inDegree.findAll { it.value == 0 }.keySet().toList()
+    def queue = inDegree.findAll { it.value == 0 }.keySet().toList()
     def ordered = []
 
     while (!queue.isEmpty()) {
@@ -254,7 +360,9 @@ def topologicalSort(List services) {
         ordered << nameToSvc[current]
         graph[current].each { neighbour ->
             inDegree[neighbour]--
-            if (inDegree[neighbour] == 0) queue << neighbour
+            if (inDegree[neighbour] == 0) {
+                queue << neighbour
+            }
         }
     }
 
@@ -263,18 +371,13 @@ def topologicalSort(List services) {
         return services
     }
 
-    return ordered
+    ordered
 }
 
-/**
- * Merge user-supplied envJson array with backend-resolved relationship URLs.
- * Relationship entries take precedence over same-named user entries.
- * Returns a JSON string.
- */
 def mergeEnvAndRelationships(String envJson, List relationships) {
     def userVars = []
     try {
-        userVars = readJSON text: (envJson?.trim() ?: '[]')
+        userVars = parseJson(envJson?.trim() ?: '[]')
     } catch (Exception ignored) {
         echo "WARNING: Could not parse envJson — treating as empty: ${envJson}"
     }
@@ -283,11 +386,123 @@ def mergeEnvAndRelationships(String envJson, List relationships) {
         [name: rel.name, value: rel.value]
     }
 
-    // Index user vars, then overlay relationship vars
     def merged = [:]
-    userVars.each  { v -> merged[v.name] = v.value }
-    relVars.each   { v -> merged[v.name] = v.value }
+    userVars.each { v -> merged[v.name] = v.value }
+    relVars.each { v -> merged[v.name] = v.value }
 
     def result = merged.collect { k, v -> [name: k, value: v] }
-    return writeJSON(returnText: true, json: result)
+    toJsonText(result)
+}
+
+def parseJson(String text) {
+    new JsonSlurperClassic().parseText(text ?: 'null')
+}
+
+def toJsonText(def value) {
+    JsonOutput.toJson(value)
+}
+
+def slugify(String raw, int maxLen = 40) {
+    def normalized = (raw ?: '')
+        .toLowerCase()
+        .replaceAll(/[^a-z0-9-]+/, '-')
+        .replaceAll(/^-+/, '')
+        .replaceAll(/-+$/, '')
+        .replaceAll(/-{2,}/, '-')
+
+    if (!normalized) {
+        normalized = 'x'
+    }
+
+    normalized.take(maxLen)
+}
+
+def resolveRegistryContext(String rawValue) {
+    def normalizedRegistry = (rawValue ?: '')
+        .trim()
+        .replaceFirst(/^https?:\/\//, '')
+        .replaceAll(/\/+$/, '')
+
+    if (!normalizedRegistry) {
+        error('REGISTRY_REPOSITORY is required')
+    }
+
+    def registryParts = normalizedRegistry.tokenize('/')
+    def firstRegistryPart = registryParts ? registryParts[0] : ''
+    def hostLikeRegistry = firstRegistryPart.contains('.') || firstRegistryPart.contains(':') || firstRegistryPart == 'localhost'
+    def dockerHubMode = !hostLikeRegistry || ['docker.io', 'index.docker.io', 'registry-1.docker.io'].contains(firstRegistryPart)
+
+    if (dockerHubMode) {
+        def dockerHubNamespace = ['docker.io', 'index.docker.io', 'registry-1.docker.io'].contains(firstRegistryPart)
+            ? (registryParts.size() > 1 ? registryParts[1] : '')
+            : firstRegistryPart
+        if (!dockerHubNamespace) {
+            error('For Docker Hub, REGISTRY_REPOSITORY must be your namespace, for example "your-dockerhub-user" or "docker.io/your-dockerhub-user"')
+        }
+
+        return [
+            dockerHubMode : true,
+            loginServer   : 'docker.io',
+            repositoryRoot: "docker.io/${dockerHubNamespace}"
+        ]
+    }
+
+    if (registryParts.size() < 2) {
+        error('For private registries, REGISTRY_REPOSITORY must include registry host and project, for example "harbor.example.com/platform"')
+    }
+
+    [
+        dockerHubMode : false,
+        loginServer   : firstRegistryPart,
+        repositoryRoot: normalizedRegistry
+    ]
+}
+
+def buildImageRepository(String repositoryRoot, String safeProjectName, String safeUserId, boolean dockerHubMode) {
+    dockerHubMode
+        ? "${repositoryRoot}/${safeProjectName}"
+        : "${repositoryRoot}/${safeUserId}/${safeProjectName}"
+}
+
+def resolveCommitAndFramework(def svc, String branch, String safeProjectName, int index, String frameworkOverride) {
+    def resolvedRepoUrl = svc.repoUrl?.toString()?.trim() ?: ''
+    if (resolvedRepoUrl.contains('%')) {
+        resolvedRepoUrl = java.net.URLDecoder.decode(resolvedRepoUrl, 'UTF-8')
+    }
+
+    def resolvedCommitSha = ''
+    def resolvedFramework = frameworkOverride
+
+    dir("service-plan/${index}-${safeProjectName}") {
+        deleteDir()
+        if (svc.repoCredentialsId?.toString()?.trim()) {
+            checkout([
+                $class: 'GitSCM',
+                branches: [[name: "*/${branch}"]],
+                userRemoteConfigs: [[
+                    url: resolvedRepoUrl,
+                    credentialsId: svc.repoCredentialsId.toString().trim()
+                ]]
+            ])
+        } else {
+            git url: resolvedRepoUrl, branch: branch
+        }
+
+        resolvedCommitSha = sh(
+            script: 'git rev-parse --short=12 HEAD',
+            returnStdout: true
+        ).trim()
+
+        if (!resolvedFramework) {
+            resolvedFramework = sh(
+                script: "bash '${env.INFRA_SCRIPTS_DIR}/detect-framework.sh'",
+                returnStdout: true
+            ).trim()
+        }
+    }
+
+    [
+        commitSha: resolvedCommitSha,
+        framework: resolvedFramework
+    ]
 }
