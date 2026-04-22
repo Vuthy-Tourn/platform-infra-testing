@@ -9,7 +9,7 @@
  * This keeps one service per deployable unit while avoiding one GitOps push per service.
  */
 pipeline {
-    agent any
+    agent { label '!trivy' }
 
     options {
         timeout(time: 90, unit: 'MINUTES')
