@@ -1,5 +1,4 @@
 import groovy.json.JsonOutput
-import groovy.json.JsonSlurperClassic
 
 /**
  * Microservices Orchestrator Pipeline
@@ -178,12 +177,12 @@ pipeline {
                             appPort            : svc.appPort?.toString()?.trim() ?: '8080',
                             imageTag           : imageTag,
                             envJson            : svc.envJson?.toString()?.trim() ?: '[]',
-                            relationships      : svc.relationships ?: [],
+                            relationshipsToken : svc.relationshipsToken ?: '',
                             dependsOn          : svc.dependsOn ?: [],
                             serviceType        : svc.serviceType?.toString()?.trim() ?: 'internal',
                             mergedEnvJson      : mergeEnvAndRelationships(
                                 svc.envJson?.toString()?.trim() ?: '[]',
-                                (svc.relationships ?: []) as List
+                                svc.relationshipsToken?.toString() ?: ''
                             ),
                             imageRepository    : imageRepository,
                             commitSha          : commitSha,
@@ -374,28 +373,135 @@ def topologicalSort(List services) {
     ordered
 }
 
-def mergeEnvAndRelationships(String envJson, List relationships) {
-    def userVars = []
+def parseJson(String text) {
+    def tempFile = ".jenkins-services-${System.nanoTime()}.json"
+    writeFile file: tempFile, text: text ?: '[]'
+
     try {
-        userVars = parseJson(envJson?.trim() ?: '[]')
-    } catch (Exception ignored) {
-        echo "WARNING: Could not parse envJson — treating as empty: ${envJson}"
+        def output = sh(
+            script: """python3 - '${tempFile}' <<'PY'
+import base64
+import json
+import sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as handle:
+    payload = json.load(handle)
+
+if payload is None:
+    payload = []
+
+if not isinstance(payload, list):
+    raise SystemExit("Expected a JSON array.")
+
+fields = [
+    "name",
+    "repoUrl",
+    "branch",
+    "repoCredentialsId",
+    "framework",
+    "appPort",
+    "imageTag",
+    "envJson",
+    "serviceType",
+    "customDomain",
+    "imageRepository",
+    "commitSha",
+    "mergedEnvJson",
+]
+
+for svc in payload:
+    if not isinstance(svc, dict):
+        raise SystemExit("Expected each service entry to be an object.")
+
+    depends_on = svc.get("dependsOn") or []
+    if not isinstance(depends_on, list):
+        depends_on = []
+
+    if "relationshipsToken" in svc and svc.get("relationshipsToken") is not None:
+        relationships_token = str(svc.get("relationshipsToken"))
+    else:
+        relationships_json = json.dumps(svc.get("relationships") or [], separators=(",", ":"))
+        relationships_token = base64.b64encode(relationships_json.encode("utf-8")).decode("ascii")
+
+    values = [str(svc.get(field) or "") for field in fields]
+    values.append("\\u001f".join(str(item or "") for item in depends_on if str(item or "")))
+    values.append(relationships_token)
+    print("\\t".join(value.replace("\\t", " ").replace("\\n", " ") for value in values))
+PY""",
+            returnStdout: true
+        ).trim()
+
+        if (!output) {
+            return []
+        }
+
+        output.readLines().collect { line ->
+            def columns = line.split('\\t', -1)
+            [
+                name              : columns[0],
+                repoUrl           : columns[1],
+                branch            : columns[2],
+                repoCredentialsId : columns[3],
+                framework         : columns[4],
+                appPort           : columns[5],
+                imageTag          : columns[6],
+                envJson           : columns[7],
+                serviceType       : columns[8],
+                customDomain      : columns[9],
+                imageRepository   : columns[10],
+                commitSha         : columns[11],
+                mergedEnvJson     : columns[12],
+                dependsOn         : columns[13] ? columns[13].split('\u001f').findAll { it } : [],
+                relationshipsToken: columns[14]
+            ]
+        }
+    } finally {
+        sh "rm -f '${tempFile}'"
     }
-
-    def relVars = relationships.collect { rel ->
-        [name: rel.name, value: rel.value]
-    }
-
-    def merged = [:]
-    userVars.each { v -> merged[v.name] = v.value }
-    relVars.each { v -> merged[v.name] = v.value }
-
-    def result = merged.collect { k, v -> [name: k, value: v] }
-    toJsonText(result)
 }
 
-def parseJson(String text) {
-    new JsonSlurperClassic().parseText(text ?: 'null')
+def mergeEnvAndRelationships(String envJson, String relationshipsToken) {
+    def envTempFile = ".jenkins-env-${System.nanoTime()}.json"
+    writeFile file: envTempFile, text: envJson ?: '[]'
+
+    try {
+        sh(
+            script: """python3 - '${envTempFile}' '${relationshipsToken ?: ''}' <<'PY'
+import base64
+import json
+import sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as handle:
+    user_vars = json.load(handle)
+
+if not isinstance(user_vars, list):
+    user_vars = []
+
+token = sys.argv[2].strip()
+relationships = []
+if token:
+    try:
+        relationships = json.loads(base64.b64decode(token).decode("utf-8"))
+    except Exception:
+        relationships = []
+
+merged = {}
+for item in user_vars:
+    if isinstance(item, dict) and item.get("name"):
+        merged[str(item["name"])] = item.get("value", "")
+
+for item in relationships:
+    if isinstance(item, dict) and item.get("name"):
+        merged[str(item["name"])] = item.get("value", "")
+
+result = [{"name": key, "value": value} for key, value in merged.items()]
+print(json.dumps(result, separators=(",", ":")))
+PY""",
+            returnStdout: true
+        ).trim()
+    } finally {
+        sh "rm -f '${envTempFile}'"
+    }
 }
 
 def toJsonText(def value) {
