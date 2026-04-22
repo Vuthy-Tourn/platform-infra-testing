@@ -1,5 +1,3 @@
-import groovy.json.JsonOutput
-
 /**
  * Microservices Orchestrator Pipeline
  *
@@ -126,7 +124,7 @@ pipeline {
                     def services = parseJson(params.SERVICES_JSON)
                     def ordered = topologicalSort(services)
                     env.ORDERED_SERVICE_NAMES = ordered.collect { it.name }.join(',')
-                    env.ORDERED_SERVICES_JSON = toJsonText(ordered)
+                    env.ORDERED_SERVICES_STATE = encodeServicesForState(ordered)
                     echo "Deploy order: ${env.ORDERED_SERVICE_NAMES}"
                 }
             }
@@ -135,7 +133,7 @@ pipeline {
         stage('Prepare release plan') {
             steps {
                 script {
-                    def services = parseJson(env.ORDERED_SERVICES_JSON)
+                    def services = decodeServicesFromState(env.ORDERED_SERVICES_STATE)
                     def plannedServices = []
 
                     services.eachWithIndex { svc, index ->
@@ -190,7 +188,7 @@ pipeline {
                         ]
                     }
 
-                    env.PLANNED_SERVICES_JSON = toJsonText(plannedServices)
+                    env.PLANNED_SERVICES_STATE = encodeServicesForState(plannedServices)
                     echo "Prepared release plan for ${plannedServices.size()} service(s)"
                 }
             }
@@ -199,7 +197,7 @@ pipeline {
         stage('Build and push services') {
             steps {
                 script {
-                    def services = parseJson(env.PLANNED_SERVICES_JSON)
+                    def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
                     def failures = []
 
                     services.each { svc ->
@@ -247,7 +245,7 @@ pipeline {
             }
             steps {
                 script {
-                    def services = parseJson(env.PLANNED_SERVICES_JSON)
+                    def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
                     def operation = params.ROLLBACK_MODE ? 'rollback' : 'deploy'
                     def workspaceCommitMessage = "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
 
@@ -504,8 +502,71 @@ PY""",
     }
 }
 
-def toJsonText(def value) {
-    JsonOutput.toJson(value)
+def encodeServicesForState(List services) {
+    services.collect { svc ->
+        [
+            svc.name,
+            svc.repoUrl,
+            svc.branch,
+            svc.repoCredentialsId,
+            svc.framework,
+            svc.appPort,
+            svc.imageTag,
+            svc.envJson,
+            svc.serviceType,
+            svc.customDomain,
+            svc.imageRepository,
+            svc.commitSha,
+            svc.mergedEnvJson,
+            ((svc.dependsOn ?: []).collect { it?.toString() ?: '' }.findAll { it }.join('\u001f')),
+            svc.relationshipsToken
+        ].collect { encodeStateField(it) }.join('\t')
+    }.join('\n')
+}
+
+def decodeServicesFromState(String state) {
+    if (!state?.trim()) {
+        return []
+    }
+
+    state.readLines().findAll { it?.trim() }.collect { line ->
+        def columns = line.split('\t', -1).collect { decodeStateField(it) }
+        [
+            name              : columns.size() > 0 ? columns[0] : '',
+            repoUrl           : columns.size() > 1 ? columns[1] : '',
+            branch            : columns.size() > 2 ? columns[2] : '',
+            repoCredentialsId : columns.size() > 3 ? columns[3] : '',
+            framework         : columns.size() > 4 ? columns[4] : '',
+            appPort           : columns.size() > 5 ? columns[5] : '',
+            imageTag          : columns.size() > 6 ? columns[6] : '',
+            envJson           : columns.size() > 7 ? columns[7] : '',
+            serviceType       : columns.size() > 8 ? columns[8] : '',
+            customDomain      : columns.size() > 9 ? columns[9] : '',
+            imageRepository   : columns.size() > 10 ? columns[10] : '',
+            commitSha         : columns.size() > 11 ? columns[11] : '',
+            mergedEnvJson     : columns.size() > 12 ? columns[12] : '',
+            dependsOn         : (columns.size() > 13 && columns[13])
+                ? columns[13].split('\u001f').findAll { it }
+                : [],
+            relationshipsToken: columns.size() > 14 ? columns[14] : ''
+        ]
+    }
+}
+
+def encodeStateField(def value) {
+    (value?.toString() ?: '')
+        .replace('\\', '\\\\')
+        .replace('\t', '\\t')
+        .replace('\n', '\\n')
+        .replace('\r', '\\r')
+}
+
+def decodeStateField(String value) {
+    (value ?: '')
+        .replace('\\r', '\r')
+        .replace('\\n', '\n')
+        .replace('\\t', '\t')
+        .replace('\\\\', '\\')
 }
 
 def slugify(String raw, int maxLen = 40) {
