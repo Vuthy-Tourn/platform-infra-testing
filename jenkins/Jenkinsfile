@@ -341,7 +341,7 @@ pipeline {
                 )]) {
                     sh '''
                         echo "[scan] Loading built image bundle on the Trivy node"
-                        docker load -i image.tar
+                        docker load -i user-app/image.tar
 
                         echo "[scan] Logging in to ${REGISTRY_LOGIN_SERVER} on the Trivy node"
                         echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
@@ -369,7 +369,7 @@ pipeline {
             post {
                 always {
                     sh '''
-                        rm -f image.tar || true
+                        rm -f user-app/image.tar || true
                         docker rmi "${IMAGE_FULL}" || true
                         docker image prune -f || true
                     '''
