@@ -374,7 +374,7 @@ def topologicalSort(List services) {
 }
 
 def parseJson(String text) {
-    def tempFile = ".jenkins-services-${System.nanoTime()}.json"
+    def tempFile = '.jenkins-services.json'
     writeFile file: tempFile, text: text ?: '[]'
 
     try {
@@ -461,7 +461,7 @@ PY""",
 }
 
 def mergeEnvAndRelationships(String envJson, String relationshipsToken) {
-    def envTempFile = ".jenkins-env-${System.nanoTime()}.json"
+    def envTempFile = '.jenkins-env.json'
     writeFile file: envTempFile, text: envJson ?: '[]'
 
     try {
