@@ -233,11 +233,10 @@ pipeline {
             }
         }
 
-        stage('Build → Scan → Push') {
+        stage('Build Image') {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent { label 'trivy' }
             steps {
                 script {
                     // Re-checkout infra (for scripts + helm chart)
@@ -311,37 +310,63 @@ pipeline {
                             echo "[build] Starting docker build for ${IMAGE_FULL}"
                             docker build --pull --progress=plain --provenance=false -t "$IMAGE_FULL" .
                             echo "[build] Docker build completed"
+                            echo "[build] Exporting image bundle for ${IMAGE_FULL}"
+                            docker save "${IMAGE_FULL}" -o image.tar
                         '''
                     }
 
-                // 2. Scan (conditional). The test copy avoids the external Jenkins shared library
-                // and runs a lightweight local Trivy check when the binary is available.
-                if (params.ENABLE_TRIVY_SCAN) {
-                    sh '''
-                        if command -v trivy >/dev/null 2>&1; then
-                            echo "[scan] Starting local Trivy scan for ${IMAGE_FULL}"
-                            trivy image --severity HIGH,CRITICAL --exit-code 1 "${IMAGE_FULL}"
-                            echo "[scan] Trivy scan completed"
-                        else
-                            echo "[scan] Trivy is not installed on this Jenkins agent. Skipping scan in test mode."
-                        fi
-                    '''
+                    stash name: 'built-image-tar', includes: 'user-app/image.tar'
                 }
+            }
+        }
 
-                // 3. Push — always runs after scan (scan failures call error() and stop execution)
+        stage('Scan → Push Image') {
+            when {
+                expression { return !params.ROLLBACK_MODE }
+            }
+            agent { label 'trivy' }
+            steps {
+                deleteDir()
+                unstash 'built-image-tar'
                 withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-credentials',
+                    credentialsId: 'dockerhub-credentials-micro',
                     usernameVariable: 'REGISTRY_USERNAME',
                     passwordVariable: 'REGISTRY_PASSWORD'
                 )]) {
                     sh '''
-                        echo "[push] Pushing image ${IMAGE_FULL}"
+                        echo "[scan] Loading built image bundle on the Trivy node"
+                        docker load -i image.tar
+
+                        echo "[scan] Logging in to ${REGISTRY_LOGIN_SERVER} on the Trivy node"
                         echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
                             -u "${REGISTRY_USERNAME}" --password-stdin
+
+                        if [ "${ENABLE_TRIVY_SCAN}" = "true" ]; then
+                          if command -v trivy >/dev/null 2>&1; then
+                            echo "[scan] Starting Trivy scan for pushed image ${IMAGE_FULL}"
+                            trivy image --severity HIGH,CRITICAL --exit-code 1 "${IMAGE_FULL}"
+                            echo "[scan] Trivy scan completed"
+                          else
+                            echo "[scan] Trivy is not installed on this Jenkins agent."
+                            exit 1
+                          fi
+                        else
+                            echo "[scan] ENABLE_TRIVY_SCAN=false, skipping scan."
+                        fi
+
+                        echo "[push] Pushing image ${IMAGE_FULL}"
                         docker push "${IMAGE_FULL}"
                         echo "[push] Image push completed"
                     '''
-                    }
+                }
+            }
+            post {
+                always {
+                    sh '''
+                        rm -f image.tar || true
+                        docker rmi "${IMAGE_FULL}" || true
+                        docker image prune -f || true
+                    '''
                 }
             }
         }
