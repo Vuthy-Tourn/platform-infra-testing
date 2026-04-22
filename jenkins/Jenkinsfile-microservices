@@ -9,7 +9,7 @@
  * This keeps one service per deployable unit while avoiding one GitOps push per service.
  */
 pipeline {
-    agent { label '!trivy' }
+    agent none
 
     options {
         timeout(time: 90, unit: 'MINUTES')
@@ -37,6 +37,7 @@ pipeline {
 
     stages {
         stage('Validate') {
+            agent any
             steps {
                 script {
                     if (!params.USER_ID?.trim()) {
@@ -88,6 +89,7 @@ pipeline {
         }
 
         stage('Checkout infra') {
+            agent any
             steps {
                 dir('platform-infra') {
                     checkout([
@@ -119,6 +121,7 @@ pipeline {
         }
 
         stage('Resolve deploy order') {
+            agent any
             steps {
                 script {
                     def services = parseJson(params.SERVICES_JSON)
@@ -131,6 +134,7 @@ pipeline {
         }
 
         stage('Prepare release plan') {
+            agent any
             steps {
                 script {
                     def services = decodeServicesFromState(env.ORDERED_SERVICES_STATE)
@@ -195,6 +199,7 @@ pipeline {
         }
 
         stage('Build and push services') {
+            agent none
             steps {
                 script {
                     def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
@@ -243,6 +248,7 @@ pipeline {
             when {
                 expression { return params.ENABLE_GITOPS_UPDATE }
             }
+            agent any
             steps {
                 script {
                     def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
@@ -328,7 +334,13 @@ pipeline {
             echo "One or more services failed. Check orchestrator logs."
         }
         always {
-            cleanWs()
+            script {
+                try {
+                    cleanWs()
+                } catch (Exception ignored) {
+                    echo 'Skipping workspace cleanup because no workspace is active.'
+                }
+            }
         }
     }
 }
