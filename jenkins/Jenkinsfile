@@ -383,7 +383,11 @@ pipeline {
             }
             agent any
             steps {
-                withCredentials([sshUserPrivateKey(credentialsId: 'gitops-ssh', keyFileVariable: 'SSH_KEY')]) {
+                withCredentials([usernamePassword(
+                    credentialsId: 'gitops-micro-creds',
+                    usernameVariable: 'GITOPS_USERNAME',
+                    passwordVariable: 'GITOPS_TOKEN'
+                )]) {
                     sh '''
                         SCRIPTS_DIR=""
                         INFRA_BASE_DIR=""
@@ -405,13 +409,22 @@ pipeline {
                             OPERATION="rollback"
                         fi
 
+                        AUTHED_GITOPS_REPO_URL="${GITOPS_REPO_URL}"
+                        case "$AUTHED_GITOPS_REPO_URL" in
+                          https://*)
+                            AUTHED_GITOPS_REPO_URL="$(printf '%s' "$AUTHED_GITOPS_REPO_URL" | sed "s#^https://#https://${GITOPS_USERNAME}:${GITOPS_TOKEN}@#")"
+                            ;;
+                          http://*)
+                            AUTHED_GITOPS_REPO_URL="$(printf '%s' "$AUTHED_GITOPS_REPO_URL" | sed "s#^http://#http://${GITOPS_USERNAME}:${GITOPS_TOKEN}@#")"
+                            ;;
+                        esac
+
                         bash "${SCRIPTS_DIR}/update-gitops.sh" \
-                          --gitops-repo "${GITOPS_REPO_URL}" \
+                          --gitops-repo "${AUTHED_GITOPS_REPO_URL}" \
                           --gitops-branch "${GITOPS_BRANCH}" \
                           --infra-repo "${INFRA_REPO_URL}" \
                           --infra-revision "main" \
                           --chart-path "helm/app-template" \
-                          --ssh-key "${SSH_KEY}" \
                           --operation "${OPERATION}" \
                           --workspace-id "${EFFECTIVE_WORKSPACE_ID}" \
                           --user-id "${USER_ID}" \

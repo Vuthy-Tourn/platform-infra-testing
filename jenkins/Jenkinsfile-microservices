@@ -265,15 +265,28 @@ pipeline {
                     def operation = params.ROLLBACK_MODE ? 'rollback' : 'deploy'
                     def workspaceCommitMessage = "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
 
-                    withCredentials([sshUserPrivateKey(credentialsId: 'gitops-ssh', keyFileVariable: 'SSH_KEY')]) {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'gitops-micro-creds',
+                        usernameVariable: 'GITOPS_USERNAME',
+                        passwordVariable: 'GITOPS_TOKEN'
+                    )]) {
                         sh '''
                             set -e
                             test -f "$WORKSPACE/platform-infra/jenkins/scripts/update-gitops.sh"
                             rm -rf "$WORKSPACE/gitops-batch"
-                            export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
-                            git clone --branch "${GITOPS_BRANCH}" --depth 1 "${GITOPS_REPO_URL}" "$WORKSPACE/gitops-batch" >/dev/null
+                            AUTHED_GITOPS_REPO_URL="${GITOPS_REPO_URL}"
+                            case "$AUTHED_GITOPS_REPO_URL" in
+                              https://*)
+                                AUTHED_GITOPS_REPO_URL="$(printf '%s' "$AUTHED_GITOPS_REPO_URL" | sed "s#^https://#https://${GITOPS_USERNAME}:${GITOPS_TOKEN}@#")"
+                                ;;
+                              http://*)
+                                AUTHED_GITOPS_REPO_URL="$(printf '%s' "$AUTHED_GITOPS_REPO_URL" | sed "s#^http://#http://${GITOPS_USERNAME}:${GITOPS_TOKEN}@#")"
+                                ;;
+                            esac
+                            git clone --branch "${GITOPS_BRANCH}" --depth 1 "${AUTHED_GITOPS_REPO_URL}" "$WORKSPACE/gitops-batch" >/dev/null
                             git -C "$WORKSPACE/gitops-batch" config user.email "jenkins@platform.local"
-                            git -C "$WORKSPACE/gitops-batch" config user.name "Jenkins CI"
+                            git -C "$WORKSPACE/gitops-batch" config user.name "${GITOPS_USERNAME}"
+                            git -C "$WORKSPACE/gitops-batch" remote set-url origin "${AUTHED_GITOPS_REPO_URL}"
                         '''
 
                         services.each { svc ->
@@ -320,7 +333,6 @@ pipeline {
                         withEnv(["BATCH_COMMIT_MESSAGE=${workspaceCommitMessage}"]) {
                             sh '''
                                 set -e
-                                export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
                                 cd "$WORKSPACE/gitops-batch"
                                 git add apps
                                 if git diff --cached --quiet; then
