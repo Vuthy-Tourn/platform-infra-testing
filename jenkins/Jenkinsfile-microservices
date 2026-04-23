@@ -265,24 +265,10 @@ pipeline {
                     def operation = params.ROLLBACK_MODE ? 'rollback' : 'deploy'
                     def workspaceCommitMessage = "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
 
-                    def batchInfraScriptsDir = sh(
-                        script: '''
-                            set -e
-                            for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
-                                if [ -f "$d/update-gitops.sh" ]; then
-                                    echo "$d"
-                                    exit 0
-                                fi
-                            done
-                            echo "ERROR: update-gitops.sh not found in expected infra directories." >&2
-                            exit 1
-                        ''',
-                        returnStdout: true
-                    ).trim()
-
                     withCredentials([sshUserPrivateKey(credentialsId: 'gitops-ssh', keyFileVariable: 'SSH_KEY')]) {
                         sh '''
                             set -e
+                            test -f "$WORKSPACE/platform-infra/jenkins/scripts/update-gitops.sh"
                             rm -rf "$WORKSPACE/gitops-batch"
                             export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
                             git clone --branch "${GITOPS_BRANCH}" --depth 1 "${GITOPS_REPO_URL}" "$WORKSPACE/gitops-batch" >/dev/null
@@ -301,12 +287,11 @@ pipeline {
                                 "BATCH_APP_PORT=${svc.appPort}",
                                 "BATCH_FRAMEWORK=${svc.framework}",
                                 "BATCH_SERVICE_TYPE=${svc.serviceType}",
-                                "BATCH_COMMIT_SHA=${svc.commitSha}",
-                                "BATCH_INFRA_SCRIPTS_DIR=${batchInfraScriptsDir}"
+                                "BATCH_COMMIT_SHA=${svc.commitSha}"
                             ]) {
                                 sh '''
                                     set -e
-                                    bash "${BATCH_INFRA_SCRIPTS_DIR}/update-gitops.sh" \
+                                    bash "$WORKSPACE/platform-infra/jenkins/scripts/update-gitops.sh" \
                                       --gitops-repo "${GITOPS_REPO_URL}" \
                                       --gitops-branch "${GITOPS_BRANCH}" \
                                       --gitops-workdir "$WORKSPACE/gitops-batch" \
