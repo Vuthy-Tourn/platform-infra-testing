@@ -358,9 +358,9 @@ pipeline {
         }
         always {
             script {
-                try {
+                if (getContext(hudson.FilePath)) {
                     cleanWs()
-                } catch (Exception ignored) {
+                } else {
                     echo 'Skipping workspace cleanup because no workspace is active.'
                 }
             }
