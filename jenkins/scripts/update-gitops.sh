@@ -753,14 +753,15 @@ commit_and_push() {
   local project_path="$3"
   local namespace_file="$4"
   local shared_chart_root="$5"
-  local commit_message="$6"
+  local application_path="$6"
+  local commit_message="$7"
 
   (
     cd "${repo_dir}"
     git config user.email "jenkins@platform.local"
     git config user.name "Jenkins CI"
 
-    git add "${project_path}" "${namespace_file}" "${shared_chart_root}"
+    git add "${project_path}" "${namespace_file}" "${shared_chart_root}" "${application_path}"
 
     if git diff --cached --quiet; then
       echo "No GitOps changes required. Requested image tag already present."
@@ -1008,6 +1009,7 @@ write_gitops_state() {
 
   LEGACY_APP_ROOT="apps/${SAFE_USER_ID}/${SAFE_PROJECT_NAME}"
   NEW_APP_ROOT="apps/${SAFE_WORKSPACE_ID}/${SAFE_USER_ID}/${SAFE_PROJECT_NAME}"
+  APPLICATION_ROOT="applications/${SAFE_WORKSPACE_ID}/${SAFE_USER_ID}"
 
   if [[ -d "${repo_dir}/${LEGACY_APP_ROOT}" && ! -d "${repo_dir}/${NEW_APP_ROOT}" ]]; then
     APP_ROOT="${LEGACY_APP_ROOT}"
@@ -1024,14 +1026,15 @@ write_gitops_state() {
   SHARED_CHART_DIR="${repo_dir}/${SHARED_CHART_ROOT}/app-template"
   VALUES_FILE="${PROJECT_DIR}/values.yaml"
   KUSTOMIZATION_FILE="${PROJECT_DIR}/kustomization.yaml"
-  APPLICATION_FILE="${PROJECT_DIR}/application.yaml"
+  APPLICATION_FILE="${repo_dir}/${APPLICATION_ROOT}/${SAFE_PROJECT_NAME}.yaml"
   CHART_SOURCE_DIR="${INFRA_ROOT_DIR}/${CHART_PATH}"
   CHART_HOME_RELATIVE="$(relative_path "${PROJECT_DIR}" "${repo_dir}/${SHARED_CHART_ROOT}")"
 
-  mkdir -p "${PROJECT_DIR}" "${repo_dir}/${USER_ROOT}"
+  mkdir -p "${PROJECT_DIR}" "${repo_dir}/${USER_ROOT}" "${repo_dir}/${APPLICATION_ROOT}"
   mkdir -p "${repo_dir}/${SHARED_CHART_ROOT}"
   rm -rf "${PROJECT_DIR}/with-helm" "${PROJECT_DIR}/base"
   rm -f \
+    "${PROJECT_DIR}/application.yaml" \
     "${PROJECT_DIR}/deployment.yaml" \
     "${PROJECT_DIR}/service.yaml" \
     "${PROJECT_DIR}/serviceaccount.yaml" \
@@ -1091,7 +1094,7 @@ while [[ "${ATTEMPT}" -le "${MAX_ATTEMPTS}" ]]; do
   fi
 
   set +e
-  commit_and_push "${REPO_DIR}" "${GITOPS_BRANCH}" "${APP_ROOT}" "${NAMESPACE_FILE}" "${SHARED_CHART_ROOT}" "${COMMIT_MESSAGE}"
+  commit_and_push "${REPO_DIR}" "${GITOPS_BRANCH}" "${APP_ROOT}" "${NAMESPACE_FILE}" "${SHARED_CHART_ROOT}" "${APPLICATION_ROOT}/${SAFE_PROJECT_NAME}.yaml" "${COMMIT_MESSAGE}"
   RESULT=$?
   set -e
 
