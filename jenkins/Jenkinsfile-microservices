@@ -250,10 +250,35 @@ pipeline {
             }
             agent any
             steps {
+                dir('platform-infra') {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        userRemoteConfigs: [[
+                            url: env.INFRA_REPO_URL,
+                            credentialsId: 'infra-repo-creds'
+                        ]]
+                    ])
+                }
                 script {
                     def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
                     def operation = params.ROLLBACK_MODE ? 'rollback' : 'deploy'
                     def workspaceCommitMessage = "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
+
+                    env.INFRA_SCRIPTS_DIR = sh(
+                        script: '''
+                            set -e
+                            for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
+                                if [ -f "$d/update-gitops.sh" ]; then
+                                    echo "$d"
+                                    exit 0
+                                fi
+                            done
+                            echo "ERROR: update-gitops.sh not found in expected infra directories." >&2
+                            exit 1
+                        ''',
+                        returnStdout: true
+                    ).trim()
 
                     withCredentials([sshUserPrivateKey(credentialsId: 'gitops-ssh', keyFileVariable: 'SSH_KEY')]) {
                         sh '''
