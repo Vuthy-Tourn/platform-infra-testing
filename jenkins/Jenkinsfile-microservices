@@ -310,7 +310,7 @@ pipeline {
                                       --gitops-workdir "$WORKSPACE/gitops-batch" \
                                       --infra-repo "${INFRA_REPO_URL}" \
                                       --infra-revision "main" \
-                                      --chart-path "helm/app-template" \
+                                      --chart-path "kustomize/app-template" \
                                       --operation "${BATCH_OPERATION}" \
                                       --workspace-id "${EFFECTIVE_WORKSPACE_ID}" \
                                       --user-id "${USER_ID}" \

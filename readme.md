@@ -48,7 +48,7 @@ Production-grade CI/CD building blocks for a multi-tenant deployment platform (V
 - `kubernetes/bootstrap-tenant-namespace.sh`
 - `kubernetes/registry-secret.yaml`
 - `docker/dockerfiles/*`
-- `helm/app-template/*`
+- `kustomize/app-template/*`
 
 ## Jenkins credentials required
 

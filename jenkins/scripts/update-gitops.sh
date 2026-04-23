@@ -276,6 +276,351 @@ probes:
 VALUES
 }
 
+create_env_file() {
+  local env_file="$1"
+  local env_json="$2"
+
+  if [[ -z "${env_json}" ]]; then
+    env_json="[]"
+  fi
+
+  python3 - "${env_json}" > "${env_file}" <<'PY'
+import json
+import sys
+
+raw = sys.argv[1] if len(sys.argv) > 1 else "[]"
+try:
+    items = json.loads(raw)
+except Exception:
+    items = []
+
+if not isinstance(items, list):
+    items = []
+
+for item in items:
+    if not isinstance(item, dict):
+        continue
+    name = str(item.get("name", "")).strip()
+    if not name:
+        continue
+    value = item.get("value", "")
+    if value is None:
+        value = ""
+    value = str(value).replace("\r", "").replace("\n", "\\n")
+    print(f"{name}={value}")
+PY
+}
+
+create_serviceaccount_manifest() {
+  local file="$1"
+  local safe_project_name="$2"
+  local namespace="$3"
+  local safe_user_id="$4"
+  local framework="$5"
+  local service_type="$6"
+
+  cat > "${file}" <<YAML
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${safe_project_name}
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/name: ${safe_project_name}
+    app.kubernetes.io/managed-by: kustomize
+    platform.devops/user-id: "${safe_user_id}"
+    platform.devops/project-name: "${safe_project_name}"
+    platform.devops/framework: "${framework}"
+    platform.devops/service-type: "${service_type}"
+imagePullSecrets:
+  - name: registry-secret
+YAML
+}
+
+create_deployment_manifest() {
+  local file="$1"
+  local safe_project_name="$2"
+  local namespace="$3"
+  local safe_user_id="$4"
+  local framework="$5"
+  local service_type="$6"
+  local app_port="$7"
+  local probe_mode="$8"
+  local startup_probe_enabled="$9"
+
+  cat > "${file}" <<YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${safe_project_name}
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/name: ${safe_project_name}
+    app.kubernetes.io/managed-by: kustomize
+    platform.devops/user-id: "${safe_user_id}"
+    platform.devops/project-name: "${safe_project_name}"
+    platform.devops/framework: "${framework}"
+    platform.devops/service-type: "${service_type}"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ${safe_project_name}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ${safe_project_name}
+        platform.devops/user-id: "${safe_user_id}"
+        platform.devops/project-name: "${safe_project_name}"
+    spec:
+      serviceAccountName: ${safe_project_name}
+      imagePullSecrets:
+        - name: registry-secret
+      containers:
+        - name: ${safe_project_name}
+          image: ${safe_project_name}-image:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: ${app_port}
+          envFrom:
+            - configMapRef:
+                name: ${safe_project_name}-env
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+YAML
+
+  if [[ "${startup_probe_enabled}" == "true" ]]; then
+    cat >> "${file}" <<YAML
+          startupProbe:
+YAML
+    if [[ "${probe_mode}" == "tcp" ]]; then
+      cat >> "${file}" <<YAML
+            tcpSocket:
+              port: http
+YAML
+    else
+      cat >> "${file}" <<YAML
+            httpGet:
+              path: /
+              port: http
+YAML
+    fi
+    cat >> "${file}" <<YAML
+            initialDelaySeconds: 0
+            periodSeconds: 5
+            failureThreshold: 24
+YAML
+  fi
+
+  cat >> "${file}" <<YAML
+          readinessProbe:
+YAML
+  if [[ "${probe_mode}" == "tcp" ]]; then
+    cat >> "${file}" <<YAML
+            tcpSocket:
+              port: http
+YAML
+  else
+    cat >> "${file}" <<YAML
+            httpGet:
+              path: /
+              port: http
+YAML
+  fi
+  cat >> "${file}" <<YAML
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+YAML
+  if [[ "${probe_mode}" == "tcp" ]]; then
+    cat >> "${file}" <<YAML
+            tcpSocket:
+              port: http
+YAML
+  else
+    cat >> "${file}" <<YAML
+            httpGet:
+              path: /
+              port: http
+YAML
+  fi
+  cat >> "${file}" <<YAML
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+YAML
+}
+
+create_service_manifest() {
+  local file="$1"
+  local safe_project_name="$2"
+  local namespace="$3"
+  local safe_user_id="$4"
+  local framework="$5"
+  local service_type="$6"
+  local app_port="$7"
+
+  cat > "${file}" <<YAML
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${safe_project_name}
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/name: ${safe_project_name}
+    app.kubernetes.io/managed-by: kustomize
+    platform.devops/user-id: "${safe_user_id}"
+    platform.devops/project-name: "${safe_project_name}"
+    platform.devops/framework: "${framework}"
+    platform.devops/service-type: "${service_type}"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ${safe_project_name}
+  ports:
+    - name: http
+      port: 80
+      targetPort: ${app_port}
+YAML
+}
+
+create_hpa_manifest() {
+  local file="$1"
+  local safe_project_name="$2"
+  local namespace="$3"
+  local safe_user_id="$4"
+  local framework="$5"
+  local service_type="$6"
+
+  cat > "${file}" <<YAML
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ${safe_project_name}
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/name: ${safe_project_name}
+    app.kubernetes.io/managed-by: kustomize
+    platform.devops/user-id: "${safe_user_id}"
+    platform.devops/project-name: "${safe_project_name}"
+    platform.devops/framework: "${framework}"
+    platform.devops/service-type: "${service_type}"
+spec:
+  minReplicas: 1
+  maxReplicas: 4
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ${safe_project_name}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+YAML
+}
+
+create_ingress_manifest() {
+  local file="$1"
+  local safe_project_name="$2"
+  local namespace="$3"
+  local safe_user_id="$4"
+  local framework="$5"
+  local service_type="$6"
+  local effective_host="$7"
+
+  cat > "${file}" <<YAML
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ${safe_project_name}
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/name: ${safe_project_name}
+    app.kubernetes.io/managed-by: kustomize
+    platform.devops/user-id: "${safe_user_id}"
+    platform.devops/project-name: "${safe_project_name}"
+    platform.devops/framework: "${framework}"
+    platform.devops/service-type: "${service_type}"
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - ${effective_host}
+      secretName: ${safe_project_name}-tls
+  rules:
+    - host: ${effective_host}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ${safe_project_name}
+                port:
+                  number: 80
+YAML
+}
+
+create_kustomization_file() {
+  local file="$1"
+  local namespace="$2"
+  local safe_project_name="$3"
+  local safe_user_id="$4"
+  local framework="$5"
+  local service_type="$6"
+  local image_repository="$7"
+  local image_tag="$8"
+
+  cat > "${file}" <<YAML
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${namespace}
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
+YAML
+
+  if [[ "${service_type}" == "gateway" ]]; then
+    cat >> "${file}" <<YAML
+  - ingress.yaml
+YAML
+  fi
+
+  cat >> "${file}" <<YAML
+generatorOptions:
+  disableNameSuffixHash: true
+commonLabels:
+  app.kubernetes.io/name: ${safe_project_name}
+  app.kubernetes.io/managed-by: kustomize
+  platform.devops/user-id: "${safe_user_id}"
+  platform.devops/project-name: "${safe_project_name}"
+  platform.devops/framework: "${framework}"
+  platform.devops/service-type: "${service_type}"
+configMapGenerator:
+  - name: ${safe_project_name}-env
+    envs:
+      - env.properties
+images:
+  - name: ${safe_project_name}-image
+    newName: ${image_repository}
+    newTag: ${image_tag}
+YAML
+}
+
 ensure_namespace_manifest() {
   local user_root="$1"
   local namespace="$2"
@@ -293,6 +638,11 @@ metadata:
 NAMESPACE
 }
 
+sanitize_repo_url_for_manifest() {
+  local repo_url="$1"
+  echo "${repo_url}" | sed -E 's#(https?://)[^/@]+(:[^/@]*)?@#\1#'
+}
+
 create_application_manifest() {
   local application_file="$1"
   local application_name="$2"
@@ -300,11 +650,14 @@ create_application_manifest() {
   local namespace="$4"
   local gitops_repo="$5"
   local gitops_branch="$6"
-  local values_file_path="$7"
+  local source_path="$7"
   local infra_repo="$8"
   local infra_revision="$9"
   local chart_path="${10}"
   local safe_project_name="${11}"
+  local manifest_repo
+
+  manifest_repo="$(sanitize_repo_url_for_manifest "${gitops_repo}")"
 
   cat > "${application_file}" <<APPLICATION
 apiVersion: argoproj.io/v1alpha1
@@ -322,17 +675,11 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: "${namespace}"
-  sources:
-    - repoURL: "${infra_repo}"
-      targetRevision: "${infra_revision}"
-      path: "${chart_path}"
-      helm:
-        releaseName: "${safe_project_name}"
-        valueFiles:
-          - \$values/${values_file_path}
-    - repoURL: "${gitops_repo}"
-      targetRevision: "${gitops_branch}"
-      ref: values
+  source:
+    repoURL: "${manifest_repo}"
+    targetRevision: "${gitops_branch}"
+    path: "${source_path}"
+    kustomize: {}
   syncPolicy:
     automated:
       prune: true
@@ -340,6 +687,13 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true
+  info:
+    - name: templateRepo
+      value: "${infra_repo}"
+    - name: templateRevision
+      value: "${infra_revision}"
+    - name: templatePath
+      value: "${chart_path}"
 APPLICATION
 }
 
@@ -378,7 +732,7 @@ GITOPS_BRANCH="main"
 GITOPS_WORKDIR=""
 INFRA_REPO=""
 INFRA_REVISION="main"
-CHART_PATH="helm/app-template"
+CHART_PATH="kustomize/app-template"
 SSH_KEY=""
 SKIP_PUSH="false"
 OPERATION="deploy"
@@ -551,25 +905,35 @@ if [[ -n "${GITOPS_WORKDIR}" ]]; then
 fi
 
 if [[ -z "${GITOPS_WORKDIR}" || "${SKIP_PUSH}" != "true" ]]; then
-  if [[ ! -f "${SSH_KEY}" ]]; then
-    echo "SSH key file not found: ${SSH_KEY}" >&2
-    echo "Verify Jenkins credential 'gitops-ssh' is configured as 'SSH Username with private key'." >&2
-    exit 1
+  if [[ "${GITOPS_REPO}" =~ ^https?:// ]]; then
+    SSH_KEY=""
   fi
 
-  chmod 600 "${SSH_KEY}" || true
+  if [[ ! -f "${SSH_KEY}" ]]; then
+    if [[ "${GITOPS_REPO}" =~ ^git@|^ssh:// ]]; then
+      echo "SSH key file not found: ${SSH_KEY}" >&2
+      echo "Verify Jenkins credential 'gitops-ssh' is configured as 'SSH Username with private key'." >&2
+      exit 1
+    fi
+  fi
 
-  if ! ssh-keygen -y -f "${SSH_KEY}" >/dev/null 2>&1; then
-    echo "Invalid SSH private key provided by Jenkins credential 'gitops-ssh'." >&2
-    echo "Expected a real private key (OpenSSH/PEM), not a GitHub token/password." >&2
-    echo "Use username 'git' and paste the private key content in Jenkins credentials." >&2
-    exit 1
+  if [[ -n "${SSH_KEY}" && -f "${SSH_KEY}" ]]; then
+    chmod 600 "${SSH_KEY}" || true
+  fi
+
+  if [[ -n "${SSH_KEY}" && -f "${SSH_KEY}" ]]; then
+    if ! ssh-keygen -y -f "${SSH_KEY}" >/dev/null 2>&1; then
+      echo "Invalid SSH private key provided by Jenkins credential 'gitops-ssh'." >&2
+      echo "Expected a real private key (OpenSSH/PEM), not a GitHub token/password." >&2
+      echo "Use username 'git' and paste the private key content in Jenkins credentials." >&2
+      exit 1
+    fi
   fi
 fi
 
 # If Jenkins stores GitHub repo as HTTPS but we authenticate via SSH key,
 # convert to SSH URL so git clone/push can use GIT_SSH_COMMAND.
-if [[ "${GITOPS_REPO}" =~ ^https://github\.com/([^/]+)/([^/]+?)(\.git)?/?$ ]]; then
+if [[ -n "${SSH_KEY}" && "${GITOPS_REPO}" =~ ^https://github\.com/([^/]+)/([^/]+?)(\.git)?/?$ ]]; then
   GITOPS_REPO="git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git"
 fi
 
@@ -605,14 +969,34 @@ write_gitops_state() {
 
   NAMESPACE_FILE="${USER_ROOT}/namespace.yaml"
   PROJECT_DIR="${repo_dir}/${APP_ROOT}"
-  VALUES_FILE="${PROJECT_DIR}/values.yaml"
+  ENV_FILE="${PROJECT_DIR}/env.properties"
+  KUSTOMIZATION_FILE="${PROJECT_DIR}/kustomization.yaml"
+  DEPLOYMENT_FILE="${PROJECT_DIR}/deployment.yaml"
+  SERVICE_FILE="${PROJECT_DIR}/service.yaml"
+  HPA_FILE="${PROJECT_DIR}/hpa.yaml"
+  SERVICEACCOUNT_FILE="${PROJECT_DIR}/serviceaccount.yaml"
+  INGRESS_FILE="${PROJECT_DIR}/ingress.yaml"
   APPLICATION_FILE="${PROJECT_DIR}/application.yaml"
+  EFFECTIVE_APP_PORT="$(resolve_container_port "${FRAMEWORK}" "${APP_PORT}")"
+  PROBE_MODE="$(probe_mode_for_framework "${FRAMEWORK}")"
+  STARTUP_PROBE_ENABLED="$(startup_probe_enabled_for_framework "${FRAMEWORK}")"
 
   mkdir -p "${PROJECT_DIR}" "${repo_dir}/${USER_ROOT}"
 
   ensure_namespace_manifest "${repo_dir}/${USER_ROOT}" "${NAMESPACE}"
+  create_env_file "${ENV_FILE}" "${ENV_JSON}"
+  create_serviceaccount_manifest "${SERVICEACCOUNT_FILE}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}"
+  create_deployment_manifest "${DEPLOYMENT_FILE}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}" "${EFFECTIVE_APP_PORT}" "${PROBE_MODE}" "${STARTUP_PROBE_ENABLED}"
+  create_service_manifest "${SERVICE_FILE}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}" "${EFFECTIVE_APP_PORT}"
+  create_hpa_manifest "${HPA_FILE}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}"
 
-  create_values_file "${VALUES_FILE}" "${SAFE_WORKSPACE_ID}" "${SAFE_USER_ID}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${FRAMEWORK}" "${IMAGE_REPOSITORY}" "${IMAGE_TAG}" "${APP_PORT}" "${PLATFORM_DOMAIN}" "${CUSTOM_DOMAIN}" "${ENV_JSON}" "${SERVICE_TYPE}"
+  if [[ "${SERVICE_TYPE}" == "gateway" ]]; then
+    create_ingress_manifest "${INGRESS_FILE}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}" "${EFFECTIVE_HOST}"
+  else
+    rm -f "${INGRESS_FILE}"
+  fi
+
+  create_kustomization_file "${KUSTOMIZATION_FILE}" "${NAMESPACE}" "${SAFE_PROJECT_NAME}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}" "${IMAGE_REPOSITORY}" "${IMAGE_TAG}"
 
   create_application_manifest \
     "${APPLICATION_FILE}" \
@@ -621,18 +1005,11 @@ write_gitops_state() {
     "${NAMESPACE}" \
     "${GITOPS_REPO}" \
     "${GITOPS_BRANCH}" \
-    "${APP_ROOT}/values.yaml" \
+    "${APP_ROOT}" \
     "${INFRA_REPO}" \
     "${INFRA_REVISION}" \
     "${CHART_PATH}" \
     "${SAFE_PROJECT_NAME}"
-
-  if [[ "${SERVICE_TYPE}" == "gateway" ]]; then
-    force_https_ingress "${VALUES_FILE}" || {
-      echo "Unable to force HTTPS ingress mode in ${VALUES_FILE}." >&2
-      exit 1
-    }
-  fi
 }
 
 if [[ -n "${GITOPS_WORKDIR}" ]]; then
