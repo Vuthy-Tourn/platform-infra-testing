@@ -18,11 +18,13 @@ Production-grade CI/CD building blocks for a multi-tenant deployment platform (V
 - Docker image build/push with immutable version tag format:
   - `<userId>-<buildNumber>-<commitSHA>`
 - GitOps update script that writes only deployment state to the GitOps repo:
-  - `apps/<workspaceId>/<userId>/<projectName>/values.yaml`
   - `apps/<workspaceId>/<userId>/<projectName>/application.yaml`
+  - `apps/<workspaceId>/<userId>/<projectName>/kustomization.yaml`
+  - `apps/<workspaceId>/<userId>/<projectName>/values.yaml`
   - `apps/<workspaceId>/<userId>/namespace.yaml`
+  - `templates/charts/app-template/*` shared once for all services
   - runtime env vars are passed as `ENV_JSON` and written into generated Helm values
-- Argo CD application manifests that reference the Helm chart from this infra repo instead of copying the chart into the GitOps repo
+- Argo CD application manifests point to the generated service folder and let Kustomize render the shared local Helm chart
 - Helm templates for Deployment, Service, Ingress, and HPA
 - Platform-managed Java Docker templates:
   - `Dockerfile.gradle`
@@ -48,7 +50,7 @@ Production-grade CI/CD building blocks for a multi-tenant deployment platform (V
 - `kubernetes/bootstrap-tenant-namespace.sh`
 - `kubernetes/registry-secret.yaml`
 - `docker/dockerfiles/*`
-- `kustomize/app-template/*`
+- `helm/app-template/*`
 
 ## Jenkins credentials required
 
@@ -56,8 +58,8 @@ Production-grade CI/CD building blocks for a multi-tenant deployment platform (V
 - `infra-repo-creds` (Git credentials)
 - `registry-repository` (Secret text, e.g. `registry.example.com/platform`)
 - `registry-credentials` (Username/Password)
-- `gitops-repo-url` (Secret text, SSH URL)
-- `gitops-ssh` (SSH private key)
+- `gitops-repo-url-micro` (Secret text, GitOps repository URL)
+- `gitops-https-creds` (Username/Password, GitHub username + PAT for push access)
 
 ## Pipeline inputs
 

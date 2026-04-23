@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INFRA_ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
 usage() {
   cat <<USAGE
 Usage: update-gitops.sh \
@@ -274,6 +277,53 @@ probes:
     periodSeconds: 15
     failureThreshold: 3
 VALUES
+}
+
+copy_chart_template() {
+  local source_dir="$1"
+  local target_dir="$2"
+
+  if [[ ! -d "${source_dir}" ]]; then
+    echo "Chart template source directory not found: ${source_dir}" >&2
+    exit 1
+  fi
+
+  rm -rf "${target_dir}"
+  mkdir -p "$(dirname "${target_dir}")"
+  cp -R "${source_dir}" "${target_dir}"
+}
+
+relative_path() {
+  local from_dir="$1"
+  local to_dir="$2"
+
+  python3 - "$from_dir" "$to_dir" <<'PY'
+import os
+import sys
+
+from_dir = sys.argv[1]
+to_dir = sys.argv[2]
+print(os.path.relpath(to_dir, from_dir))
+PY
+}
+
+create_with_helm_kustomization() {
+  local file="$1"
+  local namespace="$2"
+  local safe_project_name="$3"
+  local chart_home="$4"
+
+  cat > "${file}" <<YAML
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${namespace}
+helmGlobals:
+  chartHome: ${chart_home}
+helmCharts:
+  - name: app-template
+    releaseName: ${safe_project_name}
+    valuesFile: values.yaml
+YAML
 }
 
 create_env_file() {
@@ -702,14 +752,15 @@ commit_and_push() {
   local branch="$2"
   local project_path="$3"
   local namespace_file="$4"
-  local commit_message="$5"
+  local shared_chart_root="$5"
+  local commit_message="$6"
 
   (
     cd "${repo_dir}"
     git config user.email "jenkins@platform.local"
     git config user.name "Jenkins CI"
 
-    git add "${project_path}" "${namespace_file}"
+    git add "${project_path}" "${namespace_file}" "${shared_chart_root}"
 
     if git diff --cached --quiet; then
       echo "No GitOps changes required. Requested image tag already present."
@@ -732,7 +783,7 @@ GITOPS_BRANCH="main"
 GITOPS_WORKDIR=""
 INFRA_REPO=""
 INFRA_REVISION="main"
-CHART_PATH="kustomize/app-template"
+CHART_PATH="helm/app-template"
 SSH_KEY=""
 SKIP_PUSH="false"
 OPERATION="deploy"
@@ -969,34 +1020,29 @@ write_gitops_state() {
 
   NAMESPACE_FILE="${USER_ROOT}/namespace.yaml"
   PROJECT_DIR="${repo_dir}/${APP_ROOT}"
-  ENV_FILE="${PROJECT_DIR}/env.properties"
+  SHARED_CHART_ROOT="templates/charts"
+  SHARED_CHART_DIR="${repo_dir}/${SHARED_CHART_ROOT}/app-template"
+  VALUES_FILE="${PROJECT_DIR}/values.yaml"
   KUSTOMIZATION_FILE="${PROJECT_DIR}/kustomization.yaml"
-  DEPLOYMENT_FILE="${PROJECT_DIR}/deployment.yaml"
-  SERVICE_FILE="${PROJECT_DIR}/service.yaml"
-  HPA_FILE="${PROJECT_DIR}/hpa.yaml"
-  SERVICEACCOUNT_FILE="${PROJECT_DIR}/serviceaccount.yaml"
-  INGRESS_FILE="${PROJECT_DIR}/ingress.yaml"
   APPLICATION_FILE="${PROJECT_DIR}/application.yaml"
-  EFFECTIVE_APP_PORT="$(resolve_container_port "${FRAMEWORK}" "${APP_PORT}")"
-  PROBE_MODE="$(probe_mode_for_framework "${FRAMEWORK}")"
-  STARTUP_PROBE_ENABLED="$(startup_probe_enabled_for_framework "${FRAMEWORK}")"
+  CHART_SOURCE_DIR="${INFRA_ROOT_DIR}/${CHART_PATH}"
+  CHART_HOME_RELATIVE="$(relative_path "${PROJECT_DIR}" "${repo_dir}/${SHARED_CHART_ROOT}")"
 
   mkdir -p "${PROJECT_DIR}" "${repo_dir}/${USER_ROOT}"
+  mkdir -p "${repo_dir}/${SHARED_CHART_ROOT}"
+  rm -rf "${PROJECT_DIR}/with-helm" "${PROJECT_DIR}/base"
+  rm -f \
+    "${PROJECT_DIR}/deployment.yaml" \
+    "${PROJECT_DIR}/service.yaml" \
+    "${PROJECT_DIR}/serviceaccount.yaml" \
+    "${PROJECT_DIR}/hpa.yaml" \
+    "${PROJECT_DIR}/ingress.yaml" \
+    "${PROJECT_DIR}/env.properties"
 
   ensure_namespace_manifest "${repo_dir}/${USER_ROOT}" "${NAMESPACE}"
-  create_env_file "${ENV_FILE}" "${ENV_JSON}"
-  create_serviceaccount_manifest "${SERVICEACCOUNT_FILE}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}"
-  create_deployment_manifest "${DEPLOYMENT_FILE}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}" "${EFFECTIVE_APP_PORT}" "${PROBE_MODE}" "${STARTUP_PROBE_ENABLED}"
-  create_service_manifest "${SERVICE_FILE}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}" "${EFFECTIVE_APP_PORT}"
-  create_hpa_manifest "${HPA_FILE}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}"
-
-  if [[ "${SERVICE_TYPE}" == "gateway" ]]; then
-    create_ingress_manifest "${INGRESS_FILE}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}" "${EFFECTIVE_HOST}"
-  else
-    rm -f "${INGRESS_FILE}"
-  fi
-
-  create_kustomization_file "${KUSTOMIZATION_FILE}" "${NAMESPACE}" "${SAFE_PROJECT_NAME}" "${SAFE_USER_ID}" "${FRAMEWORK}" "${SERVICE_TYPE}" "${IMAGE_REPOSITORY}" "${IMAGE_TAG}"
+  copy_chart_template "${CHART_SOURCE_DIR}" "${SHARED_CHART_DIR}"
+  create_values_file "${VALUES_FILE}" "${SAFE_WORKSPACE_ID}" "${SAFE_USER_ID}" "${SAFE_PROJECT_NAME}" "${NAMESPACE}" "${FRAMEWORK}" "${IMAGE_REPOSITORY}" "${IMAGE_TAG}" "${APP_PORT}" "${PLATFORM_DOMAIN}" "${CUSTOM_DOMAIN}" "${ENV_JSON}" "${SERVICE_TYPE}"
+  create_with_helm_kustomization "${KUSTOMIZATION_FILE}" "${NAMESPACE}" "${SAFE_PROJECT_NAME}" "${CHART_HOME_RELATIVE}"
 
   create_application_manifest \
     "${APPLICATION_FILE}" \
@@ -1045,7 +1091,7 @@ while [[ "${ATTEMPT}" -le "${MAX_ATTEMPTS}" ]]; do
   fi
 
   set +e
-  commit_and_push "${REPO_DIR}" "${GITOPS_BRANCH}" "${APP_ROOT}" "${NAMESPACE_FILE}" "${COMMIT_MESSAGE}"
+  commit_and_push "${REPO_DIR}" "${GITOPS_BRANCH}" "${APP_ROOT}" "${NAMESPACE_FILE}" "${SHARED_CHART_ROOT}" "${COMMIT_MESSAGE}"
   RESULT=$?
   set -e
 
