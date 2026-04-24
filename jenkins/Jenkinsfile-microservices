@@ -166,7 +166,7 @@ pipeline {
                         def framework = metadata.framework
                         def imageTag = svc.imageTag?.toString()?.trim()
                             ? svc.imageTag.toString().trim()
-                            : "${env.SAFE_USER_ID}-${env.BUILD_NUMBER}-${commitSha}"
+                            : "${env.BUILD_NUMBER}-${commitSha}"
 
                         plannedServices << [
                             name               : serviceName,

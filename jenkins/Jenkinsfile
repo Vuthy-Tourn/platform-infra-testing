@@ -152,7 +152,7 @@ pipeline {
 
                         env.APP_COMMIT_SHA = sh(script: 'git rev-parse --short=12 HEAD', returnStdout: true).trim()
                         if (!env.IMAGE_TAG?.trim()) {
-                            env.IMAGE_TAG = "${env.SAFE_USER_ID}-${env.BUILD_NUMBER}-${env.APP_COMMIT_SHA}"
+                            env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.APP_COMMIT_SHA}"
                         }
                         env.IMAGE_FULL = "${env.IMAGE_REPOSITORY}:${env.IMAGE_TAG}"
 
