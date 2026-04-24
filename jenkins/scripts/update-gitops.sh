@@ -28,6 +28,7 @@ Usage: update-gitops.sh \
   --framework <framework> \
   --service-type <gateway|internal|registry> \
   --commit-sha <sha> \
+  --sync-wave <number> \
   --build-number <build-number>
 USAGE
 }
@@ -705,6 +706,7 @@ create_application_manifest() {
   local infra_revision="$9"
   local chart_path="${10}"
   local safe_project_name="${11}"
+  local sync_wave="${12}"
   local manifest_repo
 
   manifest_repo="$(sanitize_repo_url_for_manifest "${gitops_repo}")"
@@ -716,7 +718,7 @@ metadata:
   name: "${application_name}"
   namespace: argocd
   annotations:
-    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-wave: "${sync_wave}"
   labels:
     app.kubernetes.io/managed-by: argocd
     platform.devops/project-name: "${safe_project_name}"
@@ -799,6 +801,7 @@ FRAMEWORK=""
 SERVICE_TYPE="internal"
 COMMIT_SHA=""
 BUILD_NUMBER=""
+SYNC_WAVE="0"
 CUSTOM_DOMAIN=""
 ENV_JSON="[]"
 
@@ -892,6 +895,10 @@ while [[ $# -gt 0 ]]; do
       BUILD_NUMBER="$2"
       shift 2
       ;;
+    --sync-wave)
+      SYNC_WAVE="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -924,6 +931,11 @@ fi
 
 if [[ -z "${CHART_PATH}" ]]; then
   echo "CHART_PATH must not be empty" >&2
+  exit 1
+fi
+
+if [[ ! "${SYNC_WAVE}" =~ ^-?[0-9]+$ ]]; then
+  echo "SYNC_WAVE must be an integer" >&2
   exit 1
 fi
 
@@ -1058,7 +1070,8 @@ write_gitops_state() {
     "${INFRA_REPO}" \
     "${INFRA_REVISION}" \
     "${CHART_PATH}" \
-    "${SAFE_PROJECT_NAME}"
+    "${SAFE_PROJECT_NAME}" \
+    "${SYNC_WAVE}"
 }
 
 if [[ -n "${GITOPS_WORKDIR}" ]]; then

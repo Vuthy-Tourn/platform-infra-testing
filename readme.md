@@ -25,6 +25,7 @@ Production-grade CI/CD building blocks for a multi-tenant deployment platform (V
   - `templates/charts/app-template/*` shared once for all services
   - runtime env vars are passed as `ENV_JSON` and written into generated Helm values
 - Argo CD application manifests point to the generated service folder and let Kustomize render the shared local Helm chart
+- `dependsOn` from the orchestrator is translated into Argo CD child-application sync waves for safer rollout order
 - Helm templates for Deployment, Service, Ingress, and HPA
 - Platform-managed Java Docker templates:
   - `Dockerfile.gradle`

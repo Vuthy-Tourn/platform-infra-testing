@@ -138,6 +138,7 @@ pipeline {
             steps {
                 script {
                     def services = decodeServicesFromState(env.ORDERED_SERVICES_STATE)
+                    def syncWaveByService = buildSyncWaveMap(services)
                     def plannedServices = []
 
                     services.eachWithIndex { svc, index ->
@@ -188,7 +189,8 @@ pipeline {
                             ),
                             imageRepository    : imageRepository,
                             commitSha          : commitSha,
-                            customDomain       : svc.customDomain?.toString()?.trim() ?: ''
+                            customDomain       : svc.customDomain?.toString()?.trim() ?: '',
+                            syncWave           : (syncWaveByService[serviceName] ?: 0).toString()
                         ]
                     }
 
@@ -300,7 +302,8 @@ pipeline {
                                 "BATCH_APP_PORT=${svc.appPort}",
                                 "BATCH_FRAMEWORK=${svc.framework}",
                                 "BATCH_SERVICE_TYPE=${svc.serviceType}",
-                                "BATCH_COMMIT_SHA=${svc.commitSha}"
+                                "BATCH_COMMIT_SHA=${svc.commitSha}",
+                                "BATCH_SYNC_WAVE=${svc.syncWave ?: '0'}"
                             ]) {
                                 sh '''
                                     set -e
@@ -324,6 +327,7 @@ pipeline {
                                       --framework "${BATCH_FRAMEWORK}" \
                                       --service-type "${BATCH_SERVICE_TYPE}" \
                                       --commit-sha "${BATCH_COMMIT_SHA}" \
+                                      --sync-wave "${BATCH_SYNC_WAVE}" \
                                       --build-number "${BUILD_NUMBER}" \
                                       --skip-push true
                                 '''
@@ -404,6 +408,23 @@ def topologicalSort(List services) {
     }
 
     ordered
+}
+
+def buildSyncWaveMap(List services) {
+    def nameToSvc = services.collectEntries { [(it.name): it] }
+    def waveByName = [:]
+
+    services.each { svc ->
+        def dependencies = (svc.dependsOn ?: []).findAll { dep -> nameToSvc.containsKey(dep) }
+        if (!dependencies) {
+            waveByName[svc.name] = 0
+        } else {
+            def dependencyWaves = dependencies.collect { dep -> (waveByName[dep] ?: 0) as Integer }
+            waveByName[svc.name] = (dependencyWaves.max() ?: 0) + 1
+        }
+    }
+
+    waveByName
 }
 
 def parseJson(String text) {
@@ -554,7 +575,8 @@ def encodeServicesForState(List services) {
             svc.commitSha,
             svc.mergedEnvJson,
             ((svc.dependsOn ?: []).collect { it?.toString() ?: '' }.findAll { it }.join('\u001f')),
-            svc.relationshipsToken
+            svc.relationshipsToken,
+            svc.syncWave
         ].collect { encodeStateField(it) }.join('\t')
     }.join('\n')
 }
@@ -583,7 +605,8 @@ def decodeServicesFromState(String state) {
             dependsOn         : (columns.size() > 13 && columns[13])
                 ? columns[13].split('\u001f').findAll { it }
                 : [],
-            relationshipsToken: columns.size() > 14 ? columns[14] : ''
+            relationshipsToken: columns.size() > 14 ? columns[14] : '',
+            syncWave          : columns.size() > 15 ? columns[15] : '0'
         ]
     }
 }
