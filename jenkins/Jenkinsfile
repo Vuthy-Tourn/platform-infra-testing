@@ -341,7 +341,7 @@ pipeline {
 
                     script {
                         if (params.ENABLE_TRIVY_SCAN) {
-                            def reportPath = "/home/enz/trivy/reports/${env.SAFE_PROJECT_NAME}-${env.BUILD_NUMBER}-trivy-report.json"
+                            def reportPath = '/home/enz/trivy/reports/trivy-report.json'
                             withEnv([
                                 "FULL_IMAGE=${env.IMAGE_FULL}",
                                 'TRIVY_PATH=/home/enz/trivy/docker-compose.yml'
