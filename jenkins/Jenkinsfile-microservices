@@ -31,7 +31,7 @@ pipeline {
 
     environment {
         INFRA_REPO_URL      = credentials('infra-repo-url-micro')
-        REGISTRY_REPOSITORY = credentials('registry-repository-micro')
+        REGISTRY_REPOSITORY = credentials('register-url-micro')
         GITOPS_REPO_URL     = credentials('gitops-repo-url-micro')
     }
 
@@ -80,7 +80,6 @@ pipeline {
                     def registryContext = resolveRegistryContext(env.REGISTRY_REPOSITORY ?: '')
                     env.NORMALIZED_REGISTRY_REPOSITORY = registryContext.repositoryRoot
                     env.REGISTRY_LOGIN_SERVER = registryContext.loginServer
-                    env.DOCKER_HUB_MODE = registryContext.dockerHubMode.toString()
 
                     echo "Validated ${services.size()} service(s) for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
                     echo "Workspace stack name: ${env.SAFE_STACK_NAME}"
@@ -146,8 +145,7 @@ pipeline {
                         def imageRepository = buildImageRepository(
                             env.NORMALIZED_REGISTRY_REPOSITORY,
                             safeProjectName,
-                            env.SAFE_USER_ID,
-                            env.DOCKER_HUB_MODE?.toBoolean()
+                            env.SAFE_USER_ID
                         )
 
                         def branch = svc.branch?.toString()?.trim() ?: 'main'
@@ -693,40 +691,18 @@ def resolveRegistryContext(String rawValue) {
     }
 
     def registryParts = normalizedRegistry.tokenize('/')
-    def firstRegistryPart = registryParts ? registryParts[0] : ''
-    def hostLikeRegistry = firstRegistryPart.contains('.') || firstRegistryPart.contains(':') || firstRegistryPart == 'localhost'
-    def dockerHubMode = !hostLikeRegistry || ['docker.io', 'index.docker.io', 'registry-1.docker.io'].contains(firstRegistryPart)
-
-    if (dockerHubMode) {
-        def dockerHubNamespace = ['docker.io', 'index.docker.io', 'registry-1.docker.io'].contains(firstRegistryPart)
-            ? (registryParts.size() > 1 ? registryParts[1] : '')
-            : firstRegistryPart
-        if (!dockerHubNamespace) {
-            error('For Docker Hub, REGISTRY_REPOSITORY must be your namespace, for example "your-dockerhub-user" or "docker.io/your-dockerhub-user"')
-        }
-
-        return [
-            dockerHubMode : true,
-            loginServer   : 'docker.io',
-            repositoryRoot: "docker.io/${dockerHubNamespace}"
-        ]
-    }
-
     if (registryParts.size() < 2) {
         error('For private registries, REGISTRY_REPOSITORY must include registry host and project, for example "harbor.example.com/platform"')
     }
 
     [
-        dockerHubMode : false,
-        loginServer   : firstRegistryPart,
+        loginServer   : registryParts[0],
         repositoryRoot: normalizedRegistry
     ]
 }
 
-def buildImageRepository(String repositoryRoot, String safeProjectName, String safeUserId, boolean dockerHubMode) {
-    dockerHubMode
-        ? "${repositoryRoot}/${safeProjectName}"
-        : "${repositoryRoot}/${safeUserId}/${safeProjectName}"
+def buildImageRepository(String repositoryRoot, String safeProjectName, String safeUserId) {
+    "${repositoryRoot}/${safeUserId}/${safeProjectName}"
 }
 
 def resolveCommitAndFramework(def svc, String branch, String safeProjectName, int index, String frameworkOverride) {

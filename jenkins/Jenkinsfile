@@ -26,7 +26,7 @@ pipeline {
 
     environment {
         INFRA_REPO_URL      = credentials('infra-repo-url-micro')
-        REGISTRY_REPOSITORY = credentials('registry-repository-micro')
+        REGISTRY_REPOSITORY = credentials('register-url-micro')
     }
 
     stages {
@@ -59,12 +59,9 @@ pipeline {
                     def normalizedRegistry = (env.REGISTRY_REPOSITORY ?: '')
                         .trim()
                         .replaceFirst(/^https?:\/\//, '')
-                        .replaceFirst(/^docker\.io\//, '')
-                        .replaceFirst(/^index\.docker\.io\//, '')
-                        .replaceFirst(/^registry-1\.docker\.io\//, '')
                         .replaceAll(/\/+$/, '')
                     if (!normalizedRegistry) {
-                        error('REGISTRY_REPOSITORY must be your Docker Hub namespace, for example "vuthytourn"')
+                        error('REGISTRY_REPOSITORY must include registry host and Harbor project (example: harbor.devith.it.com/microservices-deployment)')
                     }
 
                     echo "WORKSPACE_ID=${env.EFFECTIVE_WORKSPACE_ID}"
@@ -83,13 +80,13 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    if (normalizedRegistry.contains(':') || normalizedRegistry.contains('.')) {
-                        error('REGISTRY_REPOSITORY must be only your Docker Hub namespace, for example "vuthytourn"')
+                    if (!normalizedRegistry.contains('/')) {
+                        error('REGISTRY_REPOSITORY must include registry host and Harbor project (example: harbor.devith.it.com/microservices-deployment)')
                     }
 
-                    env.NORMALIZED_REGISTRY_REPOSITORY = "docker.io/${normalizedRegistry}"
-                    env.REGISTRY_LOGIN_SERVER = 'docker.io'
-                    env.IMAGE_REPOSITORY = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_PROJECT_NAME}"
+                    env.NORMALIZED_REGISTRY_REPOSITORY = normalizedRegistry
+                    env.REGISTRY_LOGIN_SERVER = normalizedRegistry.tokenize('/')[0]
+                    env.IMAGE_REPOSITORY = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_USER_ID}/${env.SAFE_PROJECT_NAME}"
                     if (params.IMAGE_TAG?.trim()) {
                         env.IMAGE_TAG = params.IMAGE_TAG.trim()
                     }
@@ -286,7 +283,7 @@ pipeline {
                     }
 
                     withCredentials([usernamePassword(
-                        credentialsId: 'dockerhub-credentials-micro',
+                        credentialsId: 'registry-credentials',
                         usernameVariable: 'REGISTRY_USERNAME',
                         passwordVariable: 'REGISTRY_PASSWORD'
                     )]) {
@@ -324,7 +321,7 @@ pipeline {
                 deleteDir()
                 unstash 'built-image-tar'
                 withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-credentials-micro',
+                    credentialsId: 'registry-credentials',
                     usernameVariable: 'REGISTRY_USERNAME',
                     passwordVariable: 'REGISTRY_PASSWORD'
                 )]) {

@@ -43,8 +43,8 @@ This test copy is wired so the orchestrator defaults to calling `deploy-service-
 - `infra-repo-url-micro` as Secret text
 - `infra-repo-creds` as Git credentials
 - `registry-repository-micro` as Secret text
-  - Docker Hub namespace example: `your-dockerhub-user` or `docker.io/your-dockerhub-user`
-- `dockerhub-credentials-micro` as Username with password
+  - Registry root example: `harbor.devith.it.com/deployment-pipeline`
+- `registry-credentials` as Username with password
 - `gitops-repo-url-micro` as Secret text
 - `gitops-micro-creds` as Username with password
 - `DEFECTDOJO` as Secret text
