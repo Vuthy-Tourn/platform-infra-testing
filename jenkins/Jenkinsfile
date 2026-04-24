@@ -1,5 +1,7 @@
+@Library('share_lib@master') _
+
 pipeline {
-    agent none
+    agent any
 
     options {
         timeout(time: 20, unit: 'MINUTES')
@@ -13,31 +15,22 @@ pipeline {
         string(name: 'BRANCH', defaultValue: 'main', description: 'Git branch to build')
         string(name: 'USER_ID', defaultValue: '', description: 'Tenant user id')
         string(name: 'WORKSPACE_ID', defaultValue: '', description: 'Workspace id/slug for GitOps path partitioning and Kubernetes namespace')
-        string(name: 'CUSTOM_DOMAIN', defaultValue: '', description: 'Optional custom host (example: app.example.com)')
         string(name: 'PROJECT_NAME', defaultValue: '', description: 'Project slug')
         string(name: 'APP_NAME', defaultValue: '', description: 'Legacy alias for PROJECT_NAME')
-        string(name: 'APP_PORT', defaultValue: '8080', description: 'Container application port')
-        string(name: 'ENV_JSON', defaultValue: '[]', description: 'JSON array of environment variables to write into GitOps')
         string(name: 'IMAGE_TAG', defaultValue: '', description: 'Optional image tag provided by backend (deploy or rollback)')
         string(name: 'FRAMEWORK', defaultValue: '', description: 'Optional framework override provided by backend')
-        string(name: 'PLATFORM_DOMAIN', defaultValue: 'apps.example.com', description: 'Wildcard platform domain')
-        string(name: 'GITOPS_BRANCH', defaultValue: 'main', description: 'GitOps branch to update')
         string(name: 'REPO_CREDENTIALS_ID', defaultValue: '', description: 'Optional Jenkins credential id for private user repositories')
-        string(name: 'SERVICE_TYPE', defaultValue: 'internal', description: 'Service role: gateway | internal | registry. Controls ingress and probe behaviour.')
         booleanParam(name: 'ENABLE_TRIVY_SCAN', defaultValue: true, description: 'Run local Trivy image scan')
-        booleanParam(name: 'ENABLE_GITOPS_UPDATE', defaultValue: false, description: 'Update GitOps repository after push. Keep false for Jenkins-only testing.')
         booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Skip build/scan/push and update GitOps with a saved image tag')
     }
 
     environment {
         INFRA_REPO_URL      = credentials('infra-repo-url-micro')
         REGISTRY_REPOSITORY = credentials('registry-repository-micro')
-        GITOPS_REPO_URL     = credentials('gitops-repo-url-micro')
     }
 
     stages {
         stage('Validate input') {
-            agent any
             steps {
                 script {
                     if (!params.REPO_URL?.trim()) {
@@ -53,9 +46,6 @@ pipeline {
                     env.EFFECTIVE_PROJECT_NAME = params.PROJECT_NAME?.trim() ? params.PROJECT_NAME.trim() : params.APP_NAME?.trim()
                     if (!env.EFFECTIVE_PROJECT_NAME) {
                         error('PROJECT_NAME (or APP_NAME) is required')
-                    }
-                    if (!(params.APP_PORT ==~ /^\d+$/)) {
-                        error('APP_PORT must be numeric')
                     }
                     if (params.ROLLBACK_MODE) {
                         if (!params.FRAMEWORK?.trim()) {
@@ -77,7 +67,7 @@ pipeline {
                         error('REGISTRY_REPOSITORY must be your Docker Hub namespace, for example "vuthytourn"')
                     }
 
-                    echo "ENABLE_GITOPS_UPDATE=${params.ENABLE_GITOPS_UPDATE} | GITOPS_BRANCH=${params.GITOPS_BRANCH} | WORKSPACE_ID=${env.EFFECTIVE_WORKSPACE_ID} | CUSTOM_DOMAIN=${params.CUSTOM_DOMAIN}"
+                    echo "WORKSPACE_ID=${env.EFFECTIVE_WORKSPACE_ID}"
                     echo "Deployment namespace (from workspace): ${env.SAFE_WORKSPACE_ID}"
 
                     env.SAFE_USER_ID = sh(
@@ -117,7 +107,6 @@ pipeline {
         }
 
         stage('Checkout infra') {
-            agent any
             steps {
                 dir('platform-infra') {
                     checkout([
@@ -136,7 +125,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent any
             steps {
                 dir('user-app') {
                     script {
@@ -178,7 +166,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent any
             steps {
                 dir('user-app') {
                     script {
@@ -211,7 +198,7 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent any
+
             steps {
                 dir('user-app') {
                     sh '''
@@ -243,7 +230,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent any
             steps {
                 script {
                     // Re-checkout infra (for scripts + helm chart)
@@ -313,9 +299,11 @@ pipeline {
 
                     // Build
                     dir('user-app') {
+                        withEnv(["FULL_IMAGE=${env.IMAGE_FULL}"]) {
+                            echo "[build] Starting shared-library docker build for ${env.IMAGE_FULL}"
+                            buildDocker()
+                        }
                         sh '''
-                            echo "[build] Starting docker build for ${IMAGE_FULL}"
-                            docker build --pull --progress=plain --provenance=false -t "$IMAGE_FULL" .
                             echo "[build] Docker build completed"
                             echo "[build] Exporting image bundle for ${IMAGE_FULL}"
                             docker save "${IMAGE_FULL}" -o image.tar
@@ -347,20 +335,42 @@ pipeline {
                         echo "[scan] Logging in to ${REGISTRY_LOGIN_SERVER} on the Trivy node"
                         echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
                             -u "${REGISTRY_USERNAME}" --password-stdin
+                    '''
 
-                        if [ "${ENABLE_TRIVY_SCAN}" = "true" ]; then
-                          if command -v trivy >/dev/null 2>&1; then
-                            echo "[scan] Starting Trivy scan for pushed image ${IMAGE_FULL}"
-                            trivy image --severity HIGH,CRITICAL --exit-code 1 "${IMAGE_FULL}"
-                            echo "[scan] Trivy scan completed"
-                          else
-                            echo "[scan] Trivy is not installed on this Jenkins agent."
-                            exit 1
-                          fi
-                        else
+                    script {
+                        if (params.ENABLE_TRIVY_SCAN) {
+                            def reportPath = "/home/enz/trivy/reports/${env.SAFE_PROJECT_NAME}-${env.BUILD_NUMBER}-trivy-report.json"
+                            withEnv([
+                                "FULL_IMAGE=${env.IMAGE_FULL}",
+                                'TRIVY_PATH=/home/enz/trivy/docker-compose.yml'
+                            ]) {
+                                echo "[scan] Starting shared-library Trivy scan for ${env.IMAGE_FULL}"
+                                def findingCount = trivyScan(
+                                    fullImage: env.IMAGE_FULL,
+                                    trivyPath: '/home/enz/trivy/docker-compose.yml',
+                                    reportPath: reportPath,
+                                    gateSeverity: 'HIGH,CRITICAL'
+                                )
+                                echo "[scan] Shared-library Trivy report completed with ${findingCount} HIGH/CRITICAL match(es)"
+                                echo "[scan] Uploading Trivy report to DefectDojo"
+                                uploadDefectDojo(
+                                    defectdojoUrl: 'https://defectdojo.devith.it.com',
+                                    defectdojoCredentialId: 'DEFECTDOJO',
+                                    reportPath: reportPath,
+                                    productTypeName: 'Web Applications',
+                                    productName: env.EFFECTIVE_PROJECT_NAME,
+                                    engagementName: "Jenkins-${env.BUILD_NUMBER}",
+                                    testTitle: "Trivy Image Scan - ${env.IMAGE_TAG}"
+                                )
+                                echo "[scan] DefectDojo upload completed"
+                                securityGate(severity: 'HIGH,CRITICAL')
+                            }
+                        } else {
                             echo "[scan] ENABLE_TRIVY_SCAN=false, skipping scan."
-                        fi
+                        }
+                    }
 
+                    sh '''
                         echo "[push] Pushing image ${IMAGE_FULL}"
                         docker push "${IMAGE_FULL}"
                         echo "[push] Image push completed"
@@ -378,79 +388,12 @@ pipeline {
             }
         }
 
-        stage('Update GitOps repository') {
-            when {
-                expression { return params.ENABLE_GITOPS_UPDATE }
-            }
-            agent any
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'gitops-micro-creds',
-                    usernameVariable: 'GITOPS_USERNAME',
-                    passwordVariable: 'GITOPS_TOKEN'
-                )]) {
-                    sh '''
-                        SCRIPTS_DIR=""
-                        INFRA_BASE_DIR=""
-                        for base in "$WORKSPACE/platform-infra" "$WORKSPACE/plateform-infra"; do
-                            if [ -f "$base/jenkins/scripts/update-gitops.sh" ]; then
-                                SCRIPTS_DIR="$base/jenkins/scripts"
-                                INFRA_BASE_DIR="$base"
-                                break
-                            fi
-                        done
-                        if [ -z "$SCRIPTS_DIR" ]; then
-                            echo "ERROR: update-gitops.sh not found in expected infra directories."
-                            ls -la "$WORKSPACE" || true
-                            exit 1
-                        fi
-
-                        OPERATION="deploy"
-                        if [ "${ROLLBACK_MODE}" = "true" ]; then
-                            OPERATION="rollback"
-                        fi
-
-                        AUTHED_GITOPS_REPO_URL="${GITOPS_REPO_URL}"
-                        case "$AUTHED_GITOPS_REPO_URL" in
-                          https://*)
-                            AUTHED_GITOPS_REPO_URL="$(printf '%s' "$AUTHED_GITOPS_REPO_URL" | sed "s#^https://#https://${GITOPS_USERNAME}:${GITOPS_TOKEN}@#")"
-                            ;;
-                          http://*)
-                            AUTHED_GITOPS_REPO_URL="$(printf '%s' "$AUTHED_GITOPS_REPO_URL" | sed "s#^http://#http://${GITOPS_USERNAME}:${GITOPS_TOKEN}@#")"
-                            ;;
-                        esac
-
-                        bash "${SCRIPTS_DIR}/update-gitops.sh" \
-                          --gitops-repo "${AUTHED_GITOPS_REPO_URL}" \
-                          --gitops-branch "${GITOPS_BRANCH}" \
-                          --infra-repo "${INFRA_REPO_URL}" \
-                          --infra-revision "main" \
-                          --chart-path "helm/app-template" \
-                          --operation "${OPERATION}" \
-                          --workspace-id "${EFFECTIVE_WORKSPACE_ID}" \
-                          --user-id "${USER_ID}" \
-                          --project-name "${EFFECTIVE_PROJECT_NAME}" \
-                          --custom-domain "${CUSTOM_DOMAIN}" \
-                          --env-json "${ENV_JSON}" \
-                          --image-repository "${IMAGE_REPOSITORY}" \
-                          --image-tag "${IMAGE_TAG}" \
-                          --app-port "${APP_PORT}" \
-                          --platform-domain "${PLATFORM_DOMAIN}" \
-                          --framework "${FRAMEWORK}" \
-                          --service-type "${SERVICE_TYPE}" \
-                          --commit-sha "${APP_COMMIT_SHA}" \
-                          --build-number "${BUILD_NUMBER}"
-                    '''
-                }
-            }
-        }
     }
 
     post {
         success {
             echo "Deployment requested successfully for ${env.EFFECTIVE_PROJECT_NAME}."
             echo "Image: ${env.IMAGE_FULL}"
-            echo "Expected URL: https://${env.SAFE_PROJECT_NAME}.${params.PLATFORM_DOMAIN}"
         }
         failure {
             echo "Deployment failed. Check stage logs for details."

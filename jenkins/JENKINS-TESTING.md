@@ -35,22 +35,33 @@ This test copy is wired so the orchestrator defaults to calling `deploy-service-
 
 1. Run `deploy-service-test` with one repository.
 2. Confirm build and push work.
-3. Keep `ENABLE_GITOPS_UPDATE=false` for the first run.
-4. After that succeeds, run `deploy-microservices-test`.
-5. Only enable GitOps update when you are ready to test writing deployment state.
+3. After that succeeds, run `deploy-microservices-test`.
+4. Use the microservices job when you want to write GitOps deployment state.
 
 ## Jenkins credentials required
 
-- `infra-repo-url` as Secret text
+- `infra-repo-url-micro` as Secret text
 - `infra-repo-creds` as Git credentials
-- `registry-repository` as Secret text
-  - Harbor/private registry example: `harbor.example.com/platform`
-  - Docker Hub example: `your-dockerhub-user` or `docker.io/your-dockerhub-user`
-- `registry-credentials` as Username with password
-- `gitops-repo-url` as Secret text
-- `gitops-ssh` as SSH private key
+- `registry-repository-micro` as Secret text
+  - Docker Hub namespace example: `your-dockerhub-user` or `docker.io/your-dockerhub-user`
+- `dockerhub-credentials-micro` as Username with password
+- `gitops-repo-url-micro` as Secret text
+- `gitops-micro-creds` as Username with password
+- `DEFECTDOJO` as Secret text
 
 If your user repositories are private, also create a credential that can be passed in `REPO_CREDENTIALS_ID`.
+
+## Jenkins shared library required
+
+Configure a Global Pipeline Library in Jenkins:
+
+- Name: `share_lib`
+- Default version: `master`
+- Retrieval method: Modern SCM / Git
+- Repository: `https://github.com/chengdevith/share-lib`
+
+The service pipeline now uses this library for Docker build and Trivy security steps.
+It also uploads Trivy results to DefectDojo using `https://defectdojo.devith.it.com` and the `DEFECTDOJO` API token credential.
 
 ## Single-service sample parameters
 
@@ -61,14 +72,7 @@ Use these in `deploy-service-test`:
 - `USER_ID`: `test-user`
 - `WORKSPACE_ID`: `micro-test`
 - `PROJECT_NAME`: `api-gateway`
-- `APP_PORT`: `8080`
 - `FRAMEWORK`: blank to auto-detect
-- `ENV_JSON`: `[]`
-- `SERVICE_TYPE`: `gateway`
-- `PLATFORM_DOMAIN`: `apps.example.com`
-- `GITOPS_BRANCH`: `main`
-- `ENABLE_TRIVY_SCAN`: `true`
-- `ENABLE_GITOPS_UPDATE`: `false`
 - `ROLLBACK_MODE`: `false`
 
 ## Microservices sample parameters
@@ -80,7 +84,6 @@ Use these in `deploy-microservices-test`:
 - `PLATFORM_DOMAIN`: `apps.example.com`
 - `GITOPS_BRANCH`: `main`
 - `SERVICE_JOB_NAME`: `deploy-service-test`
-- `ENABLE_TRIVY_SCAN`: `true`
 - `ENABLE_GITOPS_UPDATE`: `false`
 - `ROLLBACK_MODE`: `false`
 - `SERVICES_JSON`: paste the sample from `jenkins/examples/services.sample.json`

@@ -9,7 +9,7 @@
  * This keeps one service per deployable unit while avoiding one GitOps push per service.
  */
 pipeline {
-    agent none
+    agent any
 
     options {
         timeout(time: 90, unit: 'MINUTES')
@@ -21,13 +21,12 @@ pipeline {
         string(name: 'USER_ID', defaultValue: '', description: 'Tenant user ID')
         string(name: 'WORKSPACE_ID', defaultValue: '', description: 'Workspace ID / slug')
         string(name: 'PROJECT_NAME', defaultValue: 'workspace-stack', description: 'Workspace-level stack name written to GitOps')
-        string(name: 'PLATFORM_DOMAIN', defaultValue: 'apps.example.com', description: 'Wildcard platform domain')
+        string(name: 'PLATFORM_DOMAIN', defaultValue: 'autonomous-istad.com', description: 'Wildcard platform domain')
         string(name: 'GITOPS_BRANCH', defaultValue: 'main', description: 'GitOps branch to update')
         string(name: 'SERVICE_JOB_NAME', defaultValue: 'deploy-service-test', description: 'Jenkins job name used to deploy one service')
-        booleanParam(name: 'ENABLE_TRIVY_SCAN', defaultValue: false, description: 'Run Trivy scan on each service image')
         booleanParam(name: 'ENABLE_GITOPS_UPDATE', defaultValue: true, description: 'Update GitOps repository once after all service builds succeed')
         booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Rollback all services to saved image tags')
-        string(name: 'SERVICES_JSON', defaultValue: '[]', description: 'JSON array of service descriptors (backend-provided)')
+        string(name: 'SERVICES_JSON', defaultValue: '[]', description: 'JSON array of service descriptors')
     }
 
     environment {
@@ -38,7 +37,6 @@ pipeline {
 
     stages {
         stage('Validate') {
-            agent any
             steps {
                 script {
                     if (!params.USER_ID?.trim()) {
@@ -93,7 +91,6 @@ pipeline {
         }
 
         stage('Checkout infra') {
-            agent any
             steps {
                 dir('platform-infra') {
                     checkout([
@@ -125,7 +122,6 @@ pipeline {
         }
 
         stage('Resolve deploy order') {
-            agent any
             steps {
                 script {
                     def services = parseJson(params.SERVICES_JSON)
@@ -138,7 +134,6 @@ pipeline {
         }
 
         stage('Prepare release plan') {
-            agent any
             steps {
                 script {
                     def services = decodeServicesFromState(env.ORDERED_SERVICES_STATE)
@@ -205,7 +200,6 @@ pipeline {
         }
 
         stage('Build and push services') {
-            agent none
             steps {
                 script {
                     def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
@@ -224,16 +218,9 @@ pipeline {
                                     string(name: 'USER_ID', value: params.USER_ID),
                                     string(name: 'WORKSPACE_ID', value: env.EFFECTIVE_WORKSPACE_ID),
                                     string(name: 'PROJECT_NAME', value: svc.name),
-                                    string(name: 'APP_PORT', value: svc.appPort),
                                     string(name: 'FRAMEWORK', value: svc.framework),
                                     string(name: 'IMAGE_TAG', value: svc.imageTag),
-                                    string(name: 'ENV_JSON', value: svc.mergedEnvJson),
-                                    string(name: 'SERVICE_TYPE', value: svc.serviceType),
-                                    string(name: 'PLATFORM_DOMAIN', value: params.PLATFORM_DOMAIN),
-                                    string(name: 'GITOPS_BRANCH', value: params.GITOPS_BRANCH),
                                     string(name: 'REPO_CREDENTIALS_ID', value: svc.repoCredentialsId),
-                                    booleanParam(name: 'ENABLE_TRIVY_SCAN', value: params.ENABLE_TRIVY_SCAN),
-                                    booleanParam(name: 'ENABLE_GITOPS_UPDATE', value: false),
                                     booleanParam(name: 'ROLLBACK_MODE', value: params.ROLLBACK_MODE)
                                 ]
                             echo "=== ${svc.name}: built successfully ==="
@@ -254,7 +241,6 @@ pipeline {
             when {
                 expression { return params.ENABLE_GITOPS_UPDATE }
             }
-            agent any
             steps {
                 dir('platform-infra') {
                     checkout([

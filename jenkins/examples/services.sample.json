@@ -1,16 +1,36 @@
 [
   {
+    "name": "eureka-server",
+    "serviceType": "registry",
+    "repoUrl": "https://github.com/Vuthy-Tourn/flower-eureka-server",
+    "branch": "main",
+    "repoCredentialsId": "",
+    "framework": "",
+    "appPort": "8761",
+    "imageTag": "",
+    "envJson": "[]",
+    "relationships": [],
+    "dependsOn": []
+  },
+  {
     "name": "config-server",
     "serviceType": "internal",
     "repoUrl": "https://github.com/Vuthy-Tourn/flower-config-server",
     "branch": "main",
     "repoCredentialsId": "",
     "framework": "",
-    "appPort": "8888",
+    "appPort": "8089",
     "imageTag": "",
     "envJson": "[]",
-    "relationships": [],
-    "dependsOn": []
+    "relationships": [
+      {
+        "name": "EUREKA_URL",
+        "value": "http://eureka-server.ns-vuthy-tourn-bba33c3e.svc.cluster.local:8761/eureka/"
+      }
+    ],
+    "dependsOn": [
+      "eureka-server"
+    ]
   },
   {
     "name": "api-gateway",
@@ -19,17 +39,22 @@
     "branch": "main",
     "repoCredentialsId": "",
     "framework": "",
-    "appPort": "8080",
+    "appPort": "9099",
     "imageTag": "",
     "envJson": "[]",
     "relationships": [
       {
         "name": "CONFIG_SERVER_URL",
-        "value": "http://config-server.user-test.svc.cluster.local:8888"
+        "value": "http://config-server.ns-vuthy-tourn-bba33c3e.svc.cluster.local:8089/"
+      },
+      {
+        "name": "EUREKA_URL",
+        "value": "http://eureka-server.ns-vuthy-tourn-bba33c3e.svc.cluster.local:8761/eureka/"
       }
     ],
     "dependsOn": [
-      "config-server"
+      "config-server",
+      "eureka-server"
     ]
   }
 ]
