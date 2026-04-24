@@ -24,8 +24,8 @@ pipeline {
         string(name: 'PLATFORM_DOMAIN', defaultValue: 'apps.example.com', description: 'Wildcard platform domain')
         string(name: 'GITOPS_BRANCH', defaultValue: 'main', description: 'GitOps branch to update')
         string(name: 'SERVICE_JOB_NAME', defaultValue: 'deploy-service-test', description: 'Jenkins job name used to deploy one service')
-        booleanParam(name: 'ENABLE_TRIVY_SCAN', defaultValue: false, description: 'Run Trivy scan on each service image')
-        booleanParam(name: 'ENABLE_GITOPS_UPDATE', defaultValue: false, description: 'Update GitOps repository once after all service builds succeed')
+        booleanParam(name: 'ENABLE_TRIVY_SCAN', defaultValue: true, description: 'Run Trivy scan on each service image')
+        booleanParam(name: 'ENABLE_GITOPS_UPDATE', defaultValue: true, description: 'Update GitOps repository once after all service builds succeed')
         booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Rollback all services to saved image tags')
         string(name: 'SERVICES_JSON', defaultValue: '[]', description: 'JSON array of service descriptors (backend-provided)')
     }
@@ -86,6 +86,7 @@ pipeline {
 
                     echo "Validated ${services.size()} service(s) for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
                     echo "Workspace stack name: ${env.SAFE_STACK_NAME}"
+                    echo "Deployment namespace (from workspace): ${env.SAFE_WORKSPACE_ID}"
                     echo "Downstream service job: ${params.SERVICE_JOB_NAME}"
                 }
             }

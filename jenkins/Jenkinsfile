@@ -12,7 +12,7 @@ pipeline {
         string(name: 'REPO_URL', defaultValue: '', description: 'Git repository URL from user (GitHub/GitLab)')
         string(name: 'BRANCH', defaultValue: 'main', description: 'Git branch to build')
         string(name: 'USER_ID', defaultValue: '', description: 'Tenant user id')
-        string(name: 'WORKSPACE_ID', defaultValue: '', description: 'Workspace id/slug for GitOps path partitioning')
+        string(name: 'WORKSPACE_ID', defaultValue: '', description: 'Workspace id/slug for GitOps path partitioning and Kubernetes namespace')
         string(name: 'CUSTOM_DOMAIN', defaultValue: '', description: 'Optional custom host (example: app.example.com)')
         string(name: 'PROJECT_NAME', defaultValue: '', description: 'Project slug')
         string(name: 'APP_NAME', defaultValue: '', description: 'Legacy alias for PROJECT_NAME')
@@ -78,6 +78,7 @@ pipeline {
                     }
 
                     echo "ENABLE_GITOPS_UPDATE=${params.ENABLE_GITOPS_UPDATE} | GITOPS_BRANCH=${params.GITOPS_BRANCH} | WORKSPACE_ID=${env.EFFECTIVE_WORKSPACE_ID} | CUSTOM_DOMAIN=${params.CUSTOM_DOMAIN}"
+                    echo "Deployment namespace (from workspace): ${env.SAFE_WORKSPACE_ID}"
 
                     env.SAFE_USER_ID = sh(
                         script: '''echo "$USER_ID" | tr '[:upper:]' '[:lower:]' | sed -E "s/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g" | cut -c1-30''',
