@@ -406,8 +406,14 @@ def buildSyncWaveMap(List services) {
         if (!dependencies) {
             waveByName[svc.name] = 0
         } else {
-            def dependencyWaves = dependencies.collect { dep -> (waveByName[dep] ?: 0) as Integer }
-            waveByName[svc.name] = (dependencyWaves.max() ?: 0) + 1
+            def maxWave = 0
+            dependencies.each { dep ->
+                def dependencyWave = (waveByName[dep] ?: 0) as Integer
+                if (dependencyWave > maxWave) {
+                    maxWave = dependencyWave
+                }
+            }
+            waveByName[svc.name] = maxWave + 1
         }
     }
 
