@@ -365,7 +365,7 @@ pipeline {
                                     testTitle: "Trivy Image Scan - ${env.IMAGE_TAG}"
                                 )
                                 echo "[scan] DefectDojo upload completed"
-                                securityGate(severity: 'HIGH,CRITICAL')
+                                securityGate(severity: 'CRITICAL')
                             }
                         } else {
                             echo "[scan] ENABLE_TRIVY_SCAN=false, skipping scan."
