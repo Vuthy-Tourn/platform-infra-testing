@@ -17,16 +17,16 @@ Production-grade CI/CD building blocks for a multi-tenant deployment platform (V
   - Web and API apps keep HTTP probes on `/`
 - Docker image build/push with immutable version tag format:
   - `<userId>-<buildNumber>-<commitSHA>`
-- GitOps update script that writes only deployment state to the GitOps repo:
-  - `apps/<workspaceId>/<userId>/<projectName>/application.yaml`
-  - `apps/<workspaceId>/<userId>/<projectName>/kustomization.yaml`
-  - `apps/<workspaceId>/<userId>/<projectName>/values.yaml`
-  - `apps/<workspaceId>/<userId>/namespace.yaml`
-  - `templates/charts/app-template/*` shared once for all services
-  - runtime env vars are passed as `ENV_JSON` and written into generated Helm values
-- Argo CD application manifests point to the generated service folder and let Kustomize render the shared local Helm chart
-- `dependsOn` from the orchestrator is translated into Argo CD child-application sync waves for safer rollout order
-- Helm templates for Deployment, Service, Ingress, and HPA
+- GitOps update script that writes workspace-level deployment state to the GitOps repo:
+  - `applications/<workspaceId>/<userId>/<stackName>.yaml`
+  - `apps/<workspaceId>/<userId>/<stackName>/kustomization.yaml`
+  - `apps/<workspaceId>/<userId>/<stackName>/values.yaml`
+  - `apps/<workspaceId>/<userId>/<stackName>/namespace.yaml`
+  - `templates/charts/app-template/*` shared once for all workspace stacks
+  - runtime env vars are written into the umbrella Helm values as per-service `envJson`
+- Argo CD application manifests point to one workspace stack folder and let Kustomize render the shared local Helm chart
+- `dependsOn` from the orchestrator is translated into per-service Argo CD sync-wave annotations inside the umbrella chart
+- Helm templates for workspace-level Deployment, Service, Ingress, HPA, and ServiceAccount generation
 - Platform-managed Java Docker templates:
   - `Dockerfile.gradle`
   - `Dockerfile.maven`

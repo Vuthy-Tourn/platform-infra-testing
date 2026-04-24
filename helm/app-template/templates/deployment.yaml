@@ -1,99 +1,110 @@
+{{- range $service := .Values.services }}
+{{- $ctx := dict "root" $ "service" $service }}
+{{- $probeMode := default "http" $service.probes.mode }}
+{{- $envJson := trim (default "" $service.envJson) }}
+{{- $envVars := $service.env | default (list) }}
+{{- if $envJson }}
+{{- $envVars = fromJsonArray $envJson }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "tenant-app.fullname" . }}
-  namespace: {{ .Values.app.namespace }}
+  name: {{ include "tenant-app.serviceName" $ctx }}
+  namespace: {{ $.Values.workspace.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ include "tenant-app.syncWave" $ctx | quote }}
   labels:
-    {{- include "tenant-app.labels" . | nindent 4 }}
+    {{- include "tenant-app.labels" $ctx | nindent 4 }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ default $.Values.defaults.replicaCount $service.replicaCount }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "tenant-app.name" . }}
-      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/name: {{ include "tenant-app.serviceName" $ctx }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
   template:
     metadata:
+      annotations:
+        argocd.argoproj.io/sync-wave: {{ include "tenant-app.syncWave" $ctx | quote }}
       labels:
-        app.kubernetes.io/name: {{ include "tenant-app.name" . }}
-        app.kubernetes.io/instance: {{ .Release.Name }}
-        platform.devops/user-id: {{ .Values.app.userId | quote }}
-        platform.devops/project-name: {{ .Values.app.projectName | quote }}
+        app.kubernetes.io/name: {{ include "tenant-app.serviceName" $ctx }}
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        platform.devops/workspace-id: {{ $.Values.workspace.id | quote }}
+        platform.devops/user-id: {{ $.Values.workspace.userId | quote }}
+        platform.devops/project-name: {{ $service.name | quote }}
+        platform.devops/framework: {{ $service.framework | quote }}
+        platform.devops/service-type: {{ default "internal" $service.serviceType | quote }}
     spec:
-      serviceAccountName: {{ if .Values.serviceAccount.create }}{{ default (include "tenant-app.fullname" .) .Values.serviceAccount.name }}{{ else }}default{{ end }}
-      {{- $probeMode := default "http" .Values.probes.mode }}
-      {{- $envJson := trim (default "" .Values.envJson) }}
-      {{- $envVars := .Values.env | default (list) }}
-      {{- if $envJson }}
-      {{- $envVars = fromJson $envJson }}
-      {{- end }}
-      {{- if .Values.imagePullSecrets }}
+      serviceAccountName: {{ include "tenant-app.serviceAccountName" $ctx }}
+      {{- if $.Values.imagePullSecrets }}
       imagePullSecrets:
-        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+        {{- toYaml $.Values.imagePullSecrets | nindent 8 }}
       {{- end }}
       containers:
-        - name: {{ include "tenant-app.name" . }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+        - name: {{ include "tenant-app.serviceName" $ctx }}
+          image: "{{ $service.image.repository }}:{{ $service.image.tag }}"
+          imagePullPolicy: {{ default $.Values.defaults.image.pullPolicy $service.image.pullPolicy }}
           ports:
-            - containerPort: {{ .Values.app.containerPort }}
+            - containerPort: {{ $service.containerPort }}
               name: http
           {{- if $envVars }}
           env:
             {{- toYaml $envVars | nindent 12 }}
           {{- end }}
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-          {{- if and .Values.probes .Values.probes.startup .Values.probes.startup.enabled }}
+            {{- toYaml (default $.Values.defaults.resources $service.resources) | nindent 12 }}
+          {{- if and $service.probes $service.probes.startup $service.probes.startup.enabled }}
           startupProbe:
             {{- if eq $probeMode "tcp" }}
             tcpSocket:
               port: http
             {{- else }}
             httpGet:
-              path: {{ .Values.probes.startup.path }}
+              path: {{ default "/" $service.probes.startup.path }}
               port: http
             {{- end }}
-            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
-            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
-            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            initialDelaySeconds: {{ default 0 $service.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ default 5 $service.probes.startup.periodSeconds }}
+            failureThreshold: {{ default 24 $service.probes.startup.failureThreshold }}
           {{- end }}
-          {{- if and .Values.probes .Values.probes.readiness .Values.probes.readiness.enabled }}
+          {{- if and $service.probes $service.probes.readiness $service.probes.readiness.enabled }}
           readinessProbe:
             {{- if eq $probeMode "tcp" }}
             tcpSocket:
               port: http
             {{- else }}
             httpGet:
-              path: {{ .Values.probes.readiness.path }}
+              path: {{ default "/" $service.probes.readiness.path }}
               port: http
             {{- end }}
-            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
-            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
-            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            initialDelaySeconds: {{ default 10 $service.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ default 10 $service.probes.readiness.periodSeconds }}
+            failureThreshold: {{ default 3 $service.probes.readiness.failureThreshold }}
           {{- end }}
-          {{- if and .Values.probes .Values.probes.liveness .Values.probes.liveness.enabled }}
+          {{- if and $service.probes $service.probes.liveness $service.probes.liveness.enabled }}
           livenessProbe:
             {{- if eq $probeMode "tcp" }}
             tcpSocket:
               port: http
             {{- else }}
             httpGet:
-              path: {{ .Values.probes.liveness.path }}
+              path: {{ default "/" $service.probes.liveness.path }}
               port: http
             {{- end }}
-            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
-            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
-            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            initialDelaySeconds: {{ default 30 $service.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ default 15 $service.probes.liveness.periodSeconds }}
+            failureThreshold: {{ default 3 $service.probes.liveness.failureThreshold }}
           {{- end }}
-      {{- with .Values.nodeSelector }}
+      {{- with $.Values.defaults.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with $.Values.defaults.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tolerations }}
+      {{- with $.Values.defaults.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+---
+{{- end }}

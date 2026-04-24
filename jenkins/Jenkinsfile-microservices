@@ -20,6 +20,7 @@ pipeline {
     parameters {
         string(name: 'USER_ID', defaultValue: '', description: 'Tenant user ID')
         string(name: 'WORKSPACE_ID', defaultValue: '', description: 'Workspace ID / slug')
+        string(name: 'PROJECT_NAME', defaultValue: 'workspace-stack', description: 'Workspace-level stack name written to GitOps')
         string(name: 'PLATFORM_DOMAIN', defaultValue: 'apps.example.com', description: 'Wildcard platform domain')
         string(name: 'GITOPS_BRANCH', defaultValue: 'main', description: 'GitOps branch to update')
         string(name: 'SERVICE_JOB_NAME', defaultValue: 'deploy-service-test', description: 'Jenkins job name used to deploy one service')
@@ -76,6 +77,7 @@ pipeline {
                     env.EFFECTIVE_WORKSPACE_ID = params.WORKSPACE_ID?.trim() ?: params.USER_ID.trim()
                     env.SAFE_USER_ID = slugify(params.USER_ID, 30)
                     env.SAFE_WORKSPACE_ID = slugify(env.EFFECTIVE_WORKSPACE_ID, 30)
+                    env.SAFE_STACK_NAME = slugify(params.PROJECT_NAME?.trim() ?: 'workspace-stack', 40)
 
                     def registryContext = resolveRegistryContext(env.REGISTRY_REPOSITORY ?: '')
                     env.NORMALIZED_REGISTRY_REPOSITORY = registryContext.repositoryRoot
@@ -83,6 +85,7 @@ pipeline {
                     env.DOCKER_HUB_MODE = registryContext.dockerHubMode.toString()
 
                     echo "Validated ${services.size()} service(s) for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+                    echo "Workspace stack name: ${env.SAFE_STACK_NAME}"
                     echo "Downstream service job: ${params.SERVICE_JOB_NAME}"
                 }
             }
@@ -265,7 +268,8 @@ pipeline {
                 script {
                     def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
                     def operation = params.ROLLBACK_MODE ? 'rollback' : 'deploy'
-                    def workspaceCommitMessage = "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
+                    def workspaceCommitMessage = "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
+                    def workspaceServicesJson = servicesStateToJson(env.PLANNED_SERVICES_STATE)
 
                     withCredentials([usernamePassword(
                         credentialsId: 'gitops-micro-creds',
@@ -291,54 +295,37 @@ pipeline {
                             git -C "$WORKSPACE/gitops-batch" remote set-url origin "${AUTHED_GITOPS_REPO_URL}"
                         '''
 
-                        services.each { svc ->
-                            withEnv([
-                                "BATCH_OPERATION=${operation}",
-                                "BATCH_PROJECT_NAME=${svc.name}",
-                                "BATCH_CUSTOM_DOMAIN=${svc.customDomain ?: ''}",
-                                "BATCH_ENV_JSON=${svc.mergedEnvJson}",
-                                "BATCH_IMAGE_REPOSITORY=${svc.imageRepository}",
-                                "BATCH_IMAGE_TAG=${svc.imageTag}",
-                                "BATCH_APP_PORT=${svc.appPort}",
-                                "BATCH_FRAMEWORK=${svc.framework}",
-                                "BATCH_SERVICE_TYPE=${svc.serviceType}",
-                                "BATCH_COMMIT_SHA=${svc.commitSha}",
-                                "BATCH_SYNC_WAVE=${svc.syncWave ?: '0'}"
-                            ]) {
-                                sh '''
-                                    set -e
-                                    bash "$WORKSPACE/platform-infra/jenkins/scripts/update-gitops.sh" \
-                                      --gitops-repo "${GITOPS_REPO_URL}" \
-                                      --gitops-branch "${GITOPS_BRANCH}" \
-                                      --gitops-workdir "$WORKSPACE/gitops-batch" \
-                                      --infra-repo "${INFRA_REPO_URL}" \
-                                      --infra-revision "main" \
-                                      --chart-path "helm/app-template" \
-                                      --operation "${BATCH_OPERATION}" \
-                                      --workspace-id "${EFFECTIVE_WORKSPACE_ID}" \
-                                      --user-id "${USER_ID}" \
-                                      --project-name "${BATCH_PROJECT_NAME}" \
-                                      --custom-domain "${BATCH_CUSTOM_DOMAIN}" \
-                                      --env-json "${BATCH_ENV_JSON}" \
-                                      --image-repository "${BATCH_IMAGE_REPOSITORY}" \
-                                      --image-tag "${BATCH_IMAGE_TAG}" \
-                                      --app-port "${BATCH_APP_PORT}" \
-                                      --platform-domain "${PLATFORM_DOMAIN}" \
-                                      --framework "${BATCH_FRAMEWORK}" \
-                                      --service-type "${BATCH_SERVICE_TYPE}" \
-                                      --commit-sha "${BATCH_COMMIT_SHA}" \
-                                      --sync-wave "${BATCH_SYNC_WAVE}" \
-                                      --build-number "${BUILD_NUMBER}" \
-                                      --skip-push true
-                                '''
-                            }
+                        withEnv([
+                            "BATCH_OPERATION=${operation}",
+                            "BATCH_PROJECT_NAME=${env.SAFE_STACK_NAME}",
+                            "BATCH_SERVICES_JSON=${workspaceServicesJson}"
+                        ]) {
+                            sh '''
+                                set -e
+                                bash "$WORKSPACE/platform-infra/jenkins/scripts/update-gitops.sh" \
+                                  --gitops-repo "${GITOPS_REPO_URL}" \
+                                  --gitops-branch "${GITOPS_BRANCH}" \
+                                  --gitops-workdir "$WORKSPACE/gitops-batch" \
+                                  --infra-repo "${INFRA_REPO_URL}" \
+                                  --infra-revision "main" \
+                                  --chart-path "helm/app-template" \
+                                  --operation "${BATCH_OPERATION}" \
+                                  --workspace-id "${EFFECTIVE_WORKSPACE_ID}" \
+                                  --user-id "${USER_ID}" \
+                                  --project-name "${BATCH_PROJECT_NAME}" \
+                                  --services-json "${BATCH_SERVICES_JSON}" \
+                                  --platform-domain "${PLATFORM_DOMAIN}" \
+                                  --commit-sha "workspace-${BUILD_NUMBER}" \
+                                  --build-number "${BUILD_NUMBER}" \
+                                  --skip-push true
+                            '''
                         }
 
                         withEnv(["BATCH_COMMIT_MESSAGE=${workspaceCommitMessage}"]) {
                             sh '''
                                 set -e
                                 cd "$WORKSPACE/gitops-batch"
-                                git add apps templates
+                                git add apps applications templates
                                 if git diff --cached --quiet; then
                                   echo "No batched GitOps changes required."
                                   exit 0
@@ -555,6 +542,66 @@ PY""",
         ).trim()
     } finally {
         sh "rm -f '${envTempFile}'"
+    }
+}
+
+def servicesStateToJson(String state) {
+    def services = decodeServicesFromState(state)
+    def tempFile = '.jenkins-workspace-services.tsv'
+
+    writeFile file: tempFile, text: services.collect { svc ->
+        [
+            svc.name ?: '',
+            svc.framework ?: '',
+            svc.appPort ?: '',
+            svc.serviceType ?: '',
+            svc.customDomain ?: '',
+            svc.imageRepository ?: '',
+            svc.imageTag ?: '',
+            svc.mergedEnvJson ?: '[]',
+            svc.syncWave ?: '0'
+        ].collect { value ->
+            (value?.toString() ?: '')
+                .replace('\t', ' ')
+                .replace('\n', ' ')
+                .replace('\r', ' ')
+        }.join('\t')
+    }.join('\n')
+
+    try {
+        return sh(
+            script: """python3 - '${tempFile}' <<'PY'
+import json
+import sys
+
+services = []
+
+with open(sys.argv[1], 'r', encoding='utf-8') as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip('\\n')
+        if not line:
+            continue
+        columns = line.split('\\t')
+        while len(columns) < 9:
+            columns.append('')
+        services.append({
+            "name": columns[0],
+            "framework": columns[1],
+            "appPort": columns[2],
+            "serviceType": columns[3] or "internal",
+            "customDomain": columns[4],
+            "imageRepository": columns[5],
+            "imageTag": columns[6],
+            "envJson": columns[7] or "[]",
+            "syncWave": columns[8] or "0",
+        })
+
+print(json.dumps(services, separators=(",", ":")))
+PY""",
+            returnStdout: true
+        ).trim()
+    } finally {
+        sh "rm -f '${tempFile}'"
     }
 }
 
