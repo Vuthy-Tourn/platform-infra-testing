@@ -8,6 +8,7 @@ metadata:
   namespace: {{ $.Values.workspace.namespace }}
   annotations:
     argocd.argoproj.io/sync-wave: {{ include "tenant-app.syncWave" $ctx | quote }}
+    argocd.argoproj.io/ignore-healthcheck: "true"
     {{- with $service.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

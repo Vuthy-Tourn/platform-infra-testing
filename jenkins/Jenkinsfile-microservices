@@ -170,7 +170,8 @@ pipeline {
                         def relationshipsToken = resolveRelationshipsToken(
                             svc,
                             services,
-                            env.EFFECTIVE_WORKSPACE_ID
+                            env.EFFECTIVE_WORKSPACE_ID,
+                            env.SAFE_STACK_NAME
                         )
 
                         plannedServices << [
@@ -571,7 +572,7 @@ PY""",
     }
 }
 
-def resolveRelationshipsToken(def svc, List services, String workspaceId) {
+def resolveRelationshipsToken(def svc, List services, String workspaceId, String stackName) {
     def servicesTempFile = '.jenkins-relationships-services.tsv'
     def directRelationshipsTempFile = '.jenkins-relationships-direct.tsv'
     def normalizeField = { value ->
@@ -582,7 +583,9 @@ def resolveRelationshipsToken(def svc, List services, String workspaceId) {
             .trim()
     }
     def serviceLines = services.collect { candidate ->
-        "${normalizeField(candidate.name)}\t${normalizeField(candidate.appPort)}"
+        def logicalName = normalizeField(candidate.name)
+        def runtimeName = buildRuntimeServiceName(stackName, logicalName)
+        "${logicalName}\t${normalizeField(runtimeName)}\t${normalizeField(candidate.appPort)}"
     }
     writeFile file: servicesTempFile, text: serviceLines.join('\n')
 
@@ -648,20 +651,25 @@ def parse_port(raw):
 
 service_index = {}
 for line in service_lines:
-    parts = line.split("\\t", 1)
+    parts = line.split("\\t")
     name = parts[0].strip() if len(parts) > 0 else ""
-    port_raw = parts[1].strip() if len(parts) > 1 else ""
+    runtime_name = parts[1].strip() if len(parts) > 1 else ""
+    port_raw = parts[2].strip() if len(parts) > 2 else ""
     if not name:
         continue
-    service_index[name] = {"port": parse_port(port_raw)}
+    service_index[name] = {
+        "runtime_name": runtime_name or name,
+        "port": parse_port(port_raw),
+    }
 
 def build_internal_url(target_name, relationship_name):
     target = service_index.get(target_name)
     if not target:
         return target_name
-    host = target_name
+    host = target.get("runtime_name") or target_name
     if workspace_id:
-        host = f"{target_name}.{workspace_id}.svc.cluster.local"
+        runtime_name = target.get("runtime_name") or target_name
+        host = f"{runtime_name}.{workspace_id}.svc.cluster.local"
     port = target.get("port") or ""
     base = f"http://{host}"
     if port:
@@ -841,6 +849,12 @@ def slugify(String raw, int maxLen = 40) {
     }
 
     normalized.take(maxLen)
+}
+
+def buildRuntimeServiceName(String stackName, String serviceName) {
+    def safeStackName = slugify(stackName ?: '', 40)
+    def safeServiceName = slugify(serviceName ?: '', 40)
+    slugify("${safeStackName}-${safeServiceName}", 63)
 }
 
 def resolveRegistryContext(String rawValue) {

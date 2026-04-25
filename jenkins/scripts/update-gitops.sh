@@ -124,15 +124,16 @@ create_values_file() {
   local workspace_id="$2"
   local user_id="$3"
   local namespace="$4"
-  local platform_domain="$5"
-  local services_json="$6"
+  local project_name="$5"
+  local platform_domain="$6"
+  local services_json="$7"
 
-  python3 - "$values_file" "$workspace_id" "$user_id" "$namespace" "$platform_domain" "$services_json" <<'PY'
+  python3 - "$values_file" "$workspace_id" "$user_id" "$namespace" "$project_name" "$platform_domain" "$services_json" <<'PY'
 import json
 import re
 import sys
 
-values_file, workspace_id, user_id, namespace, platform_domain, raw_services = sys.argv[1:7]
+values_file, workspace_id, user_id, namespace, project_name, platform_domain, raw_services = sys.argv[1:8]
 
 def slugify(raw: str, max_len: int = 40) -> str:
     normalized = re.sub(r'[^a-z0-9-]+', '-', raw.strip().lower())
@@ -229,7 +230,7 @@ for svc in services:
         raise SystemExit(f"Service '{name}' is missing image repository or tag.")
 
     custom_domain = str(svc.get("customDomain") or "").strip()
-    host = custom_domain or f"{slugify(name)}-{workspace_id}.{platform_domain}"
+    host = custom_domain or f"{slugify(project_name, 24)}-{slugify(name, 24)}-{workspace_id}.{platform_domain}"
     env_json = str(svc.get("envJson") or "[]").strip() or "[]"
     sync_wave = int(svc.get("syncWave") or 0)
     p_mode = probe_mode(framework)
@@ -553,7 +554,7 @@ mkdir -p "${WORKSPACE_DIR}" "${GITOPS_DIR}/${APPLICATION_ROOT}"
 
 copy_chart_template "${CHART_SOURCE_DIR}" "${CHART_TARGET_DIR}"
 create_namespace_manifest "${NAMESPACE_FILE}" "${NAMESPACE}" "${SAFE_USER_ID}" "${SAFE_WORKSPACE_ID}"
-create_values_file "${VALUES_FILE}" "${SAFE_WORKSPACE_ID}" "${SAFE_USER_ID}" "${NAMESPACE}" "${PLATFORM_DOMAIN}" "${SERVICES_JSON}"
+create_values_file "${VALUES_FILE}" "${SAFE_WORKSPACE_ID}" "${SAFE_USER_ID}" "${NAMESPACE}" "${SAFE_PROJECT_NAME}" "${PLATFORM_DOMAIN}" "${SERVICES_JSON}"
 
 CHART_HOME_RELATIVE="$(relative_path "${WORKSPACE_DIR}" "${GITOPS_DIR}/${SHARED_CHART_ROOT}")"
 create_workspace_kustomization "${KUSTOMIZATION_FILE}" "${NAMESPACE}" "${SAFE_PROJECT_NAME}" "${CHART_HOME_RELATIVE}"

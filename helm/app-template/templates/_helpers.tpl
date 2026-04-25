@@ -1,5 +1,5 @@
 {{- define "tenant-app.serviceName" -}}
-{{- .service.name | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-%s" .root.Release.Name .service.name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "tenant-app.serviceAccountName" -}}
@@ -24,7 +24,8 @@ app.kubernetes.io/version: {{ $root.Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ $root.Release.Service }}
 platform.devops/workspace-id: {{ $root.Values.workspace.id | quote }}
 platform.devops/user-id: {{ $root.Values.workspace.userId | quote }}
-platform.devops/project-name: {{ $service.name | quote }}
+platform.devops/project-name: {{ $root.Release.Name | quote }}
+platform.devops/service-name: {{ $service.name | quote }}
 platform.devops/framework: {{ $service.framework | quote }}
 platform.devops/service-type: {{ default "internal" $service.serviceType | quote }}
 {{- end -}}
