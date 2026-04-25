@@ -167,6 +167,11 @@ pipeline {
                         def imageTag = svc.imageTag?.toString()?.trim()
                             ? svc.imageTag.toString().trim()
                             : "${env.BUILD_NUMBER}-${commitSha}"
+                        def relationshipsToken = resolveRelationshipsToken(
+                            svc,
+                            services,
+                            env.EFFECTIVE_WORKSPACE_ID
+                        )
 
                         plannedServices << [
                             name               : serviceName,
@@ -177,12 +182,12 @@ pipeline {
                             appPort            : svc.appPort?.toString()?.trim() ?: '8080',
                             imageTag           : imageTag,
                             envJson            : svc.envJson?.toString()?.trim() ?: '[]',
-                            relationshipsToken : svc.relationshipsToken ?: '',
+                            relationshipsToken : relationshipsToken,
                             dependsOn          : svc.dependsOn ?: [],
                             serviceType        : svc.serviceType?.toString()?.trim() ?: 'internal',
                             mergedEnvJson      : mergeEnvAndRelationships(
                                 svc.envJson?.toString()?.trim() ?: '[]',
-                                svc.relationshipsToken?.toString() ?: ''
+                                relationshipsToken
                             ),
                             imageRepository    : imageRepository,
                             commitSha          : commitSha,
@@ -533,6 +538,103 @@ PY""",
         ).trim()
     } finally {
         sh "rm -f '${envTempFile}'"
+    }
+}
+
+def resolveRelationshipsToken(def svc, List services, String workspaceId) {
+    def servicesTempFile = '.jenkins-relationships-services.json'
+    def servicePayload = services.collect { candidate ->
+        [
+            name   : candidate.name ?: '',
+            appPort: candidate.appPort ?: ''
+        ]
+    }
+    writeFile file: servicesTempFile, text: groovy.json.JsonOutput.toJson(servicePayload)
+
+    try {
+        return sh(
+            script: """python3 - '${servicesTempFile}' '${workspaceId ?: ''}' <<'PY'
+import base64
+import json
+import sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as handle:
+    services = json.load(handle)
+
+workspace_id = (sys.argv[2] or '').strip()
+svc = json.loads('''${groovy.json.JsonOutput.toJson(svc).replace("\\\\", "\\\\\\\\").replace("'''", "\\'\\'\\'")}''')
+
+def load_relationships(service):
+    token = str(service.get("relationshipsToken") or "").strip()
+    if token:
+        try:
+            return json.loads(base64.b64decode(token).decode("utf-8"))
+        except Exception:
+            return []
+    raw = service.get("relationships") or []
+    return raw if isinstance(raw, list) else []
+
+def parse_port(raw):
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        value = int(text)
+        return str(value) if value > 0 else ""
+    except Exception:
+        return ""
+
+service_index = {}
+for item in services:
+    if not isinstance(item, dict):
+        continue
+    name = str(item.get("name") or "").strip()
+    if not name:
+        continue
+    service_index[name] = {
+        "port": parse_port(item.get("appPort"))
+    }
+
+def build_internal_url(target_name, relationship_name):
+    target = service_index.get(target_name)
+    if not target:
+        return target_name
+    host = target_name
+    if workspace_id:
+        host = f"{target_name}.{workspace_id}.svc.cluster.local"
+    port = target.get("port") or ""
+    base = f"http://{host}"
+    if port:
+        base = f"{base}:{port}"
+    upper_name = relationship_name.upper()
+    if upper_name == "EUREKA_URL":
+        return base.rstrip("/") + "/eureka/"
+    return base.rstrip("/") + "/"
+
+resolved = []
+for item in load_relationships(svc):
+    if not isinstance(item, dict):
+        continue
+    name = str(item.get("name") or "").strip()
+    if not name:
+        continue
+    if name.lower() == "depends_on":
+        continue
+    value = str(item.get("value") or "").strip()
+    if not value:
+        continue
+    if value.startswith("http://") or value.startswith("https://"):
+        resolved.append({"name": name, "value": value})
+        continue
+    resolved.append({"name": name, "value": build_internal_url(value, name)})
+
+encoded = base64.b64encode(json.dumps(resolved, separators=(",", ":")).encode("utf-8")).decode("ascii")
+print(encoded)
+PY""",
+            returnStdout: true
+        ).trim()
+    } finally {
+        sh "rm -f '${servicesTempFile}'"
     }
 }
 
