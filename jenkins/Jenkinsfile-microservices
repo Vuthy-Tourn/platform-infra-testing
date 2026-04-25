@@ -542,37 +542,69 @@ PY""",
 }
 
 def resolveRelationshipsToken(def svc, List services, String workspaceId) {
-    def servicesTempFile = '.jenkins-relationships-services.json'
-    def servicePayload = services.collect { candidate ->
-        [
-            name   : candidate.name ?: '',
-            appPort: candidate.appPort ?: ''
-        ]
+    def servicesTempFile = '.jenkins-relationships-services.tsv'
+    def directRelationshipsTempFile = '.jenkins-relationships-direct.tsv'
+    def normalizeField = { value ->
+        String.valueOf(value ?: '')
+            .replace('\r', ' ')
+            .replace('\n', ' ')
+            .replace('\t', ' ')
+            .trim()
     }
-    writeFile file: servicesTempFile, text: groovy.json.JsonOutput.toJson(servicePayload)
+    def serviceLines = services.collect { candidate ->
+        "${normalizeField(candidate.name)}\t${normalizeField(candidate.appPort)}"
+    }
+    writeFile file: servicesTempFile, text: serviceLines.join('\n')
+
+    def relationshipsToken = String.valueOf(svc?.relationshipsToken ?: '').trim()
+    def directRelationshipLines = []
+    if (!relationshipsToken) {
+        def rawRelationships = svc?.relationships
+        if (rawRelationships instanceof List) {
+            rawRelationships.each { item ->
+                if (item instanceof Map) {
+                    def name = normalizeField(item.name)
+                    def value = normalizeField(item.value)
+                    if (name && value) {
+                        directRelationshipLines << "${name}\t${value}"
+                    }
+                }
+            }
+        }
+    }
+    writeFile file: directRelationshipsTempFile, text: directRelationshipLines.join('\n')
 
     try {
         return sh(
-            script: """python3 - '${servicesTempFile}' '${workspaceId ?: ''}' <<'PY'
+            script: """python3 - '${servicesTempFile}' '${directRelationshipsTempFile}' '${workspaceId ?: ''}' '${relationshipsToken}' <<'PY'
 import base64
 import json
 import sys
 
 with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-    services = json.load(handle)
+    service_lines = handle.read().splitlines()
 
-workspace_id = (sys.argv[2] or '').strip()
-svc = json.loads('''${groovy.json.JsonOutput.toJson(svc).replace("\\\\", "\\\\\\\\").replace("'''", "\\'\\'\\'")}''')
+with open(sys.argv[2], 'r', encoding='utf-8') as handle:
+    relationship_lines = handle.read().splitlines()
 
-def load_relationships(service):
-    token = str(service.get("relationshipsToken") or "").strip()
+workspace_id = (sys.argv[3] or '').strip()
+relationships_token = (sys.argv[4] or '').strip()
+
+def load_relationships(token, lines):
     if token:
         try:
-            return json.loads(base64.b64decode(token).decode("utf-8"))
+            decoded = json.loads(base64.b64decode(token).decode("utf-8"))
+            return decoded if isinstance(decoded, list) else []
         except Exception:
             return []
-    raw = service.get("relationships") or []
-    return raw if isinstance(raw, list) else []
+    relationships = []
+    for line in lines:
+        parts = line.split("\\t", 1)
+        name = parts[0].strip() if len(parts) > 0 else ""
+        value = parts[1].strip() if len(parts) > 1 else ""
+        if name and value:
+            relationships.append({"name": name, "value": value})
+    return relationships
 
 def parse_port(raw):
     text = str(raw or "").strip()
@@ -585,15 +617,13 @@ def parse_port(raw):
         return ""
 
 service_index = {}
-for item in services:
-    if not isinstance(item, dict):
-        continue
-    name = str(item.get("name") or "").strip()
+for line in service_lines:
+    parts = line.split("\\t", 1)
+    name = parts[0].strip() if len(parts) > 0 else ""
+    port_raw = parts[1].strip() if len(parts) > 1 else ""
     if not name:
         continue
-    service_index[name] = {
-        "port": parse_port(item.get("appPort"))
-    }
+    service_index[name] = {"port": parse_port(port_raw)}
 
 def build_internal_url(target_name, relationship_name):
     target = service_index.get(target_name)
@@ -612,7 +642,7 @@ def build_internal_url(target_name, relationship_name):
     return base.rstrip("/") + "/"
 
 resolved = []
-for item in load_relationships(svc):
+for item in load_relationships(relationships_token, relationship_lines):
     if not isinstance(item, dict):
         continue
     name = str(item.get("name") or "").strip()
@@ -635,6 +665,7 @@ PY""",
         ).trim()
     } finally {
         sh "rm -f '${servicesTempFile}'"
+        sh "rm -f '${directRelationshipsTempFile}'"
     }
 }
 
