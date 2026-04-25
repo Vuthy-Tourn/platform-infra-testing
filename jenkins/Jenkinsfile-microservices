@@ -210,11 +210,12 @@ pipeline {
 
                     services.each { svc ->
                         echo "=== Building service: ${svc.name} (type: ${svc.serviceType}) ==="
+                        echo "[service:${svc.name}] Triggering child job '${params.SERVICE_JOB_NAME}'"
 
                         try {
-                            build job: params.SERVICE_JOB_NAME,
+                            def downstreamBuild = build job: params.SERVICE_JOB_NAME,
                                 wait: true,
-                                propagate: true,
+                                propagate: false,
                                 parameters: [
                                     string(name: 'REPO_URL', value: svc.repoUrl),
                                     string(name: 'BRANCH', value: svc.branch),
@@ -226,15 +227,44 @@ pipeline {
                                     string(name: 'REPO_CREDENTIALS_ID', value: svc.repoCredentialsId),
                                     booleanParam(name: 'ROLLBACK_MODE', value: params.ROLLBACK_MODE)
                                 ]
-                            echo "=== ${svc.name}: built successfully ==="
+
+                            def childBuildNumber = downstreamBuild?.number?.toString() ?: 'unknown'
+                            def childBuildResult = downstreamBuild?.result?.toString()?.trim() ?: 'UNKNOWN'
+                            def childBuildUrl = downstreamBuild?.absoluteUrl?.toString()?.trim() ?: ''
+                            def childBuildUrlSuffix = childBuildUrl ? " · ${childBuildUrl}" : ''
+
+                            echo "[service:${svc.name}] Child build #${childBuildNumber} finished with result ${childBuildResult}${childBuildUrlSuffix}"
+
+                            if (childBuildResult != 'SUCCESS') {
+                                failures << [
+                                    name   : svc.name,
+                                    result : childBuildResult,
+                                    build  : childBuildNumber,
+                                    url    : childBuildUrl
+                                ]
+                                echo "=== ${svc.name}: FAILED (${childBuildResult}) ==="
+                            } else {
+                                echo "=== ${svc.name}: built successfully ==="
+                            }
                         } catch (Exception e) {
                             echo "=== ${svc.name}: FAILED — ${e.message} ==="
-                            failures << svc.name
+                            failures << [
+                                name   : svc.name,
+                                result : 'ERROR',
+                                build  : 'unknown',
+                                url    : '',
+                                detail : e.message
+                            ]
                         }
                     }
 
                     if (failures) {
-                        error("The following services failed to build/deploy: ${failures.join(', ')}")
+                        failures.each { failure ->
+                            def failureUrlSuffix = failure.url ? " · ${failure.url}" : ''
+                            def failureDetailSuffix = failure.detail ? " · ${failure.detail}" : ''
+                            echo "[service:${failure.name}] FAILURE SUMMARY · result=${failure.result} · build=#${failure.build}${failureUrlSuffix}${failureDetailSuffix}"
+                        }
+                        error("The following services failed to build/deploy: ${failures.collect { it.name }.join(', ')}")
                     }
                 }
             }
