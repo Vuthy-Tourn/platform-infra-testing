@@ -26,6 +26,7 @@ pipeline {
         string(name: 'SERVICE_JOB_NAME', defaultValue: 'deploy-service-test', description: 'Jenkins job name used to deploy one service')
         booleanParam(name: 'ENABLE_GITOPS_UPDATE', defaultValue: true, description: 'Update GitOps repository once after all service builds succeed')
         booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Rollback all services to saved image tags')
+        booleanParam(name: 'DESTROY_MODE', defaultValue: false, description: 'Remove this microservice project from GitOps and tear down its runtime resources')
         string(name: 'SERVICES_JSON', defaultValue: '[]', description: 'JSON array of service descriptors')
     }
 
@@ -61,13 +62,13 @@ pipeline {
                         if (!svc.name?.toString()?.trim()) {
                             error("Service entry missing 'name': ${svc}")
                         }
-                        if (!params.ROLLBACK_MODE && !svc.repoUrl?.toString()?.trim()) {
+                        if (!params.ROLLBACK_MODE && !params.DESTROY_MODE && !svc.repoUrl?.toString()?.trim()) {
                             error("Service '${svc.name}' missing 'repoUrl'")
                         }
-                        if (params.ROLLBACK_MODE && !svc.imageTag?.toString()?.trim()) {
+                        if (params.ROLLBACK_MODE && !params.DESTROY_MODE && !svc.imageTag?.toString()?.trim()) {
                             error("Service '${svc.name}' missing 'imageTag' for rollback")
                         }
-                        if (params.ROLLBACK_MODE && !svc.framework?.toString()?.trim()) {
+                        if (params.ROLLBACK_MODE && !params.DESTROY_MODE && !svc.framework?.toString()?.trim()) {
                             error("Service '${svc.name}' missing 'framework' for rollback")
                         }
                     }
@@ -133,6 +134,9 @@ pipeline {
         }
 
         stage('Prepare release plan') {
+            when {
+                expression { return !params.DESTROY_MODE }
+            }
             steps {
                 script {
                     def services = decodeServicesFromState(env.ORDERED_SERVICES_STATE)
@@ -204,6 +208,9 @@ pipeline {
         }
 
         stage('Build and push services') {
+            when {
+                expression { return !params.DESTROY_MODE }
+            }
             steps {
                 script {
                     def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
@@ -287,10 +294,14 @@ pipeline {
                     ])
                 }
                 script {
-                    def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
-                    def operation = params.ROLLBACK_MODE ? 'rollback' : 'deploy'
+                    def services = params.DESTROY_MODE
+                        ? parseJson(params.SERVICES_JSON)
+                        : decodeServicesFromState(env.PLANNED_SERVICES_STATE)
+                    def operation = params.DESTROY_MODE ? 'destroy' : (params.ROLLBACK_MODE ? 'rollback' : 'deploy')
                     def workspaceCommitMessage = "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
-                    def workspaceServicesJson = servicesStateToJson(env.PLANNED_SERVICES_STATE)
+                    def workspaceServicesJson = params.DESTROY_MODE
+                        ? params.SERVICES_JSON.trim()
+                        : servicesStateToJson(env.PLANNED_SERVICES_STATE)
 
                     withCredentials([usernamePassword(
                         credentialsId: 'gitops-micro-creds',

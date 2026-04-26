@@ -15,7 +15,7 @@ Usage: update-gitops.sh \
   --chart-path <path> \
   --ssh-key <path> \
   --skip-push <true|false> \
-  --operation <deploy|rollback> \
+  --operation <deploy|rollback|destroy> \
   --workspace-id <workspace-id> \
   --user-id <user-id> \
   --project-name <stack-name> \
@@ -95,6 +95,16 @@ helmCharts:
   - name: app-template
     releaseName: ${release_name}
     valuesFile: values.yaml
+YAML
+}
+
+create_empty_kustomization() {
+  local file="$1"
+
+  cat > "${file}" <<YAML
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources: []
 YAML
 }
 
@@ -336,6 +346,8 @@ kind: Application
 metadata:
   name: "${application_name}"
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
   annotations:
     argocd.argoproj.io/sync-wave: "0"
   labels:
@@ -562,25 +574,42 @@ COMMIT_MESSAGE="${OPERATION}(${SAFE_WORKSPACE_ID}/${SAFE_USER_ID}/${SAFE_PROJECT
 
 mkdir -p "${WORKSPACE_DIR}" "${GITOPS_DIR}/${APPLICATION_ROOT}"
 
-copy_chart_template "${CHART_SOURCE_DIR}" "${CHART_TARGET_DIR}"
-create_namespace_manifest "${NAMESPACE_FILE}" "${NAMESPACE}" "${SAFE_USER_ID}" "${SAFE_WORKSPACE_ID}"
-create_values_file "${VALUES_FILE}" "${SAFE_WORKSPACE_ID}" "${SAFE_USER_ID}" "${NAMESPACE}" "${SAFE_PROJECT_NAME}" "${PLATFORM_DOMAIN}" "${SERVICES_JSON}"
+if [[ "${OPERATION}" == "destroy" ]]; then
+  rm -f "${VALUES_FILE}" "${NAMESPACE_FILE}"
+  create_empty_kustomization "${KUSTOMIZATION_FILE}"
+  create_application_manifest \
+    "${APPLICATION_FILE}" \
+    "${APPLICATION_NAME}" \
+    "${SAFE_PROJECT_NAME}" \
+    "${NAMESPACE}" \
+    "${GITOPS_REPO}" \
+    "${GITOPS_BRANCH}" \
+    "${APP_ROOT}" \
+    "${INFRA_REPO}" \
+    "${INFRA_REVISION}" \
+    "${CHART_PATH}"
+  echo "Prepared destroy plan at ${APP_ROOT}"
+else
+  copy_chart_template "${CHART_SOURCE_DIR}" "${CHART_TARGET_DIR}"
+  create_namespace_manifest "${NAMESPACE_FILE}" "${NAMESPACE}" "${SAFE_USER_ID}" "${SAFE_WORKSPACE_ID}"
+  create_values_file "${VALUES_FILE}" "${SAFE_WORKSPACE_ID}" "${SAFE_USER_ID}" "${NAMESPACE}" "${SAFE_PROJECT_NAME}" "${PLATFORM_DOMAIN}" "${SERVICES_JSON}"
 
-CHART_HOME_RELATIVE="$(relative_path "${WORKSPACE_DIR}" "${GITOPS_DIR}/${SHARED_CHART_ROOT}")"
-create_workspace_kustomization "${KUSTOMIZATION_FILE}" "${NAMESPACE}" "${SAFE_PROJECT_NAME}" "${CHART_HOME_RELATIVE}"
-create_application_manifest \
-  "${APPLICATION_FILE}" \
-  "${APPLICATION_NAME}" \
-  "${SAFE_PROJECT_NAME}" \
-  "${NAMESPACE}" \
-  "${GITOPS_REPO}" \
-  "${GITOPS_BRANCH}" \
-  "${APP_ROOT}" \
-  "${INFRA_REPO}" \
-  "${INFRA_REVISION}" \
-  "${CHART_PATH}"
+  CHART_HOME_RELATIVE="$(relative_path "${WORKSPACE_DIR}" "${GITOPS_DIR}/${SHARED_CHART_ROOT}")"
+  create_workspace_kustomization "${KUSTOMIZATION_FILE}" "${NAMESPACE}" "${SAFE_PROJECT_NAME}" "${CHART_HOME_RELATIVE}"
+  create_application_manifest \
+    "${APPLICATION_FILE}" \
+    "${APPLICATION_NAME}" \
+    "${SAFE_PROJECT_NAME}" \
+    "${NAMESPACE}" \
+    "${GITOPS_REPO}" \
+    "${GITOPS_BRANCH}" \
+    "${APP_ROOT}" \
+    "${INFRA_REPO}" \
+    "${INFRA_REVISION}" \
+    "${CHART_PATH}"
 
-echo "Prepared workspace stack at ${APP_ROOT}"
+  echo "Prepared workspace stack at ${APP_ROOT}"
+fi
 
 if [[ "${SKIP_PUSH}" == "true" ]]; then
   exit 0
