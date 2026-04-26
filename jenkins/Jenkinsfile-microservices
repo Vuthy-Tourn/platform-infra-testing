@@ -299,6 +299,7 @@ pipeline {
                         : decodeServicesFromState(env.PLANNED_SERVICES_STATE)
                     def operation = params.DESTROY_MODE ? 'destroy' : (params.ROLLBACK_MODE ? 'rollback' : 'deploy')
                     def workspaceCommitMessage = "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
+                    def destroyFinalizeCommitMessage = "destroy-finalize(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}): build=${env.BUILD_NUMBER}"
                     def workspaceServicesJson = params.DESTROY_MODE
                         ? params.SERVICES_JSON.trim()
                         : servicesStateToJson(env.PLANNED_SERVICES_STATE)
@@ -365,6 +366,29 @@ pipeline {
                                 git commit -m "${BATCH_COMMIT_MESSAGE}" >/dev/null
                                 git push origin "${GITOPS_BRANCH}" >/dev/null
                             '''
+                        }
+
+                        if (params.DESTROY_MODE) {
+                            withEnv([
+                                "DESTROY_APP_ROOT=apps/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}",
+                                "DESTROY_APPLICATION_FILE=applications/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}.yaml",
+                                "DESTROY_FINALIZE_COMMIT_MESSAGE=${destroyFinalizeCommitMessage}"
+                            ]) {
+                                sh '''
+                                    set -e
+                                    sleep 15
+                                    cd "$WORKSPACE/gitops-batch"
+                                    rm -rf "$DESTROY_APP_ROOT"
+                                    rm -f "$DESTROY_APPLICATION_FILE"
+                                    git add -A apps applications
+                                    if git diff --cached --quiet; then
+                                      echo "No destroy finalization changes required."
+                                      exit 0
+                                    fi
+                                    git commit -m "${DESTROY_FINALIZE_COMMIT_MESSAGE}" >/dev/null
+                                    git push origin "${GITOPS_BRANCH}" >/dev/null
+                                '''
+                            }
                         }
                     }
                 }

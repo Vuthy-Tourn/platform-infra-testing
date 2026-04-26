@@ -336,9 +336,14 @@ create_application_manifest() {
   local infra_repo="$8"
   local infra_revision="$9"
   local chart_path="${10}"
+  local operation="${11:-deploy}"
   local manifest_repo
+  local allow_empty_block=""
 
   manifest_repo="$(sanitize_repo_url_for_manifest "${gitops_repo}")"
+  if [[ "${operation}" == "destroy" ]]; then
+    allow_empty_block="      allowEmpty: true"
+  fi
 
   cat > "${application_file}" <<YAML
 apiVersion: argoproj.io/v1alpha1
@@ -367,6 +372,7 @@ spec:
     automated:
       prune: true
       selfHeal: true
+${allow_empty_block}
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true
@@ -577,17 +583,18 @@ mkdir -p "${WORKSPACE_DIR}" "${GITOPS_DIR}/${APPLICATION_ROOT}"
 if [[ "${OPERATION}" == "destroy" ]]; then
   rm -f "${VALUES_FILE}" "${NAMESPACE_FILE}"
   create_empty_kustomization "${KUSTOMIZATION_FILE}"
-  create_application_manifest \
-    "${APPLICATION_FILE}" \
-    "${APPLICATION_NAME}" \
-    "${SAFE_PROJECT_NAME}" \
-    "${NAMESPACE}" \
-    "${GITOPS_REPO}" \
-    "${GITOPS_BRANCH}" \
-    "${APP_ROOT}" \
-    "${INFRA_REPO}" \
-    "${INFRA_REVISION}" \
-    "${CHART_PATH}"
+create_application_manifest \
+  "${APPLICATION_FILE}" \
+  "${APPLICATION_NAME}" \
+  "${SAFE_PROJECT_NAME}" \
+  "${NAMESPACE}" \
+  "${GITOPS_REPO}" \
+  "${GITOPS_BRANCH}" \
+  "${APP_ROOT}" \
+  "${INFRA_REPO}" \
+  "${INFRA_REVISION}" \
+  "${CHART_PATH}" \
+  "${OPERATION}"
   echo "Prepared destroy plan at ${APP_ROOT}"
 else
   copy_chart_template "${CHART_SOURCE_DIR}" "${CHART_TARGET_DIR}"
