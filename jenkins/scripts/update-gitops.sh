@@ -235,12 +235,20 @@ for svc in services:
     sync_wave = int(svc.get("syncWave") or 0)
     p_mode = probe_mode(framework)
     startup_enabled = startup_probe_enabled(framework)
-    ingress_enabled = service_type == "gateway"
+    expose_public = svc.get("exposePublic")
+    if expose_public is None:
+        expose_public = service_type in {"gateway", "frontend"}
+    ingress_enabled = bool(expose_public)
+    primary_public = svc.get("primaryPublic")
+    if primary_public is None:
+        primary_public = False
 
     lines.extend([
         f'  - name: "{slugify(name, 63)}"',
         f'    framework: "{framework}"',
         f'    serviceType: "{service_type}"',
+        f"    exposePublic: {'true' if ingress_enabled else 'false'}",
+        f"    primaryPublic: {'true' if primary_public and ingress_enabled else 'false'}",
         f'    syncWave: {sync_wave}',
         "    replicaCount: 1",
         f"    containerPort: {container_port}",
@@ -479,6 +487,8 @@ print(json.dumps([{
     "framework": sys.argv[2],
     "appPort": sys.argv[3],
     "serviceType": sys.argv[4],
+    "exposePublic": sys.argv[4] in {"gateway", "frontend"},
+    "primaryPublic": sys.argv[4] in {"gateway", "frontend"},
     "customDomain": sys.argv[5],
     "envJson": sys.argv[6] or "[]",
     "imageRepository": sys.argv[7],
