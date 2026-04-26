@@ -280,7 +280,7 @@ pipeline {
 
         stage('Update GitOps repository (batched)') {
             when {
-                expression { return params.ENABLE_GITOPS_UPDATE }
+                expression { return params.ENABLE_GITOPS_UPDATE || params.DESTROY_MODE }
             }
             steps {
                 dir('platform-infra') {
@@ -374,10 +374,22 @@ pipeline {
 
     post {
         success {
-            echo "All services processed successfully for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+            script {
+                if (params.DESTROY_MODE) {
+                    echo "Destroy workflow completed for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+                } else {
+                    echo "All services processed successfully for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+                }
+            }
         }
         failure {
-            echo "One or more services failed. Check orchestrator logs."
+            script {
+                if (params.DESTROY_MODE) {
+                    echo "Destroy workflow failed. Check orchestrator logs."
+                } else {
+                    echo "One or more services failed. Check orchestrator logs."
+                }
+            }
         }
         always {
             script {
