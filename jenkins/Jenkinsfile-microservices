@@ -716,7 +716,7 @@ def build_internal_url(target_name, relationship_name):
     host = target.get("runtime_name") or target_name
     if workspace_id:
         runtime_name = target.get("runtime_name") or target_name
-        host = f"{runtime_name}.{workspace_id}.svc.cluster.local"
+        host = f"{runtime_name}.{workspace_id}.svc"
     port = target.get("port") or ""
     base = f"http://{host}"
     if port:

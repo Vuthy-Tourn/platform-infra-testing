@@ -25,7 +25,7 @@
     "relationships": [
       {
         "name": "EUREKA_URL",
-        "value": "http://eureka-server.ns-vuthy-tourn-bba33c3e.svc.cluster.local:8761/eureka/"
+        "value": "http://eureka-server.ns-vuthy-tourn-bba33c3e.svc:8761/eureka/"
       }
     ],
     "dependsOn": [
@@ -45,11 +45,11 @@
     "relationships": [
       {
         "name": "CONFIG_SERVER_URL",
-        "value": "http://config-server.ns-vuthy-tourn-bba33c3e.svc.cluster.local:8089/"
+        "value": "http://config-server.ns-vuthy-tourn-bba33c3e.svc:8089/"
       },
       {
         "name": "EUREKA_URL",
-        "value": "http://eureka-server.ns-vuthy-tourn-bba33c3e.svc.cluster.local:8761/eureka/"
+        "value": "http://eureka-server.ns-vuthy-tourn-bba33c3e.svc:8761/eureka/"
       }
     ],
     "dependsOn": [
