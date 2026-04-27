@@ -301,7 +301,6 @@ pipeline {
                         : decodeServicesFromState(env.PLANNED_SERVICES_STATE)
                     def operation = params.DESTROY_MODE ? 'destroy' : (params.ROLLBACK_MODE ? 'rollback' : 'deploy')
                     def workspaceCommitMessage = "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
-                    def destroyFinalizeCommitMessage = "destroy-finalize(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}): build=${env.BUILD_NUMBER}"
                     def destroyCleanupCommitMessage = "destroy-cleanup(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}): build=${env.BUILD_NUMBER}"
                     def workspaceServicesJson = params.DESTROY_MODE
                         ? params.SERVICES_JSON.trim()
@@ -331,68 +330,24 @@ pipeline {
                             git -C "$WORKSPACE/gitops-batch" remote set-url origin "${AUTHED_GITOPS_REPO_URL}"
                         '''
 
-                        withEnv([
-                            "BATCH_OPERATION=${operation}",
-                            "BATCH_PROJECT_NAME=${env.SAFE_STACK_NAME}",
-                            "BATCH_SERVICES_JSON=${workspaceServicesJson}"
-                        ]) {
-                            sh '''
-                                set -e
-                                bash "$WORKSPACE/platform-infra/jenkins/scripts/update-gitops.sh" \
-                                  --gitops-repo "${GITOPS_REPO_URL}" \
-                                  --gitops-branch "${GITOPS_BRANCH}" \
-                                  --gitops-workdir "$WORKSPACE/gitops-batch" \
-                                  --infra-repo "${INFRA_REPO_URL}" \
-                                  --infra-revision "main" \
-                                  --chart-path "helm/app-template" \
-                                  --operation "${BATCH_OPERATION}" \
-                                  --workspace-id "${EFFECTIVE_WORKSPACE_ID}" \
-                                  --user-id "${USER_ID}" \
-                                  --project-name "${BATCH_PROJECT_NAME}" \
-                                  --services-json "${BATCH_SERVICES_JSON}" \
-                                  --platform-domain "${PLATFORM_DOMAIN}" \
-                                  --commit-sha "workspace-${BUILD_NUMBER}" \
-                                  --build-number "${BUILD_NUMBER}" \
-                                  --skip-push true
-                            '''
-                        }
-
-                        withEnv(["BATCH_COMMIT_MESSAGE=${workspaceCommitMessage}"]) {
-                            sh '''
-                                set -e
-                                cd "$WORKSPACE/gitops-batch"
-                                git add apps applications templates
-                                if git diff --cached --quiet; then
-                                  echo "No batched GitOps changes required."
-                                  exit 0
-                                fi
-                                git commit -m "${BATCH_COMMIT_MESSAGE}" >/dev/null
-                                git push origin "${GITOPS_BRANCH}" >/dev/null
-                            '''
-                        }
-
                         if (params.DESTROY_MODE) {
                             withEnv([
                                 "DESTROY_APPLICATION_NAME=${slugify("${env.SAFE_STACK_NAME}-${env.SAFE_USER_ID}", 55)}",
                                 "DESTROY_APP_ROOT=apps/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}",
                                 "DESTROY_APPLICATION_FILE=applications/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}.yaml",
-                                "DESTROY_FINALIZE_COMMIT_MESSAGE=${destroyFinalizeCommitMessage}",
+                                "BATCH_COMMIT_MESSAGE=${workspaceCommitMessage}",
                                 "DESTROY_CLEANUP_COMMIT_MESSAGE=${destroyCleanupCommitMessage}"
                             ]) {
                                 sh '''
                                     set -e
-                                    sleep 15
                                     cd "$WORKSPACE/gitops-batch"
-                                    # Keep the child application's source path around during finalize.
-                                    # Removing the app path before the parent prunes the child Application
-                                    # can leave Argo with a live Application pointing at a missing path.
                                     rm -f "$DESTROY_APPLICATION_FILE"
-                                    git add -A apps applications
+                                    git add -A applications
                                     if git diff --cached --quiet; then
-                                      echo "No destroy finalization changes required."
+                                      echo "No destroy GitOps changes required."
                                       exit 0
                                     fi
-                                    git commit -m "${DESTROY_FINALIZE_COMMIT_MESSAGE}" >/dev/null
+                                    git commit -m "${BATCH_COMMIT_MESSAGE}" >/dev/null
                                     git push origin "${GITOPS_BRANCH}" >/dev/null
                                 '''
 
@@ -425,6 +380,46 @@ pipeline {
                                       exit 0
                                     fi
                                     git commit -m "${DESTROY_CLEANUP_COMMIT_MESSAGE}" >/dev/null
+                                    git push origin "${GITOPS_BRANCH}" >/dev/null
+                                '''
+                            }
+                        } else {
+                            withEnv([
+                                "BATCH_OPERATION=${operation}",
+                                "BATCH_PROJECT_NAME=${env.SAFE_STACK_NAME}",
+                                "BATCH_SERVICES_JSON=${workspaceServicesJson}"
+                            ]) {
+                                sh '''
+                                    set -e
+                                    bash "$WORKSPACE/platform-infra/jenkins/scripts/update-gitops.sh" \
+                                      --gitops-repo "${GITOPS_REPO_URL}" \
+                                      --gitops-branch "${GITOPS_BRANCH}" \
+                                      --gitops-workdir "$WORKSPACE/gitops-batch" \
+                                      --infra-repo "${INFRA_REPO_URL}" \
+                                      --infra-revision "main" \
+                                      --chart-path "helm/app-template" \
+                                      --operation "${BATCH_OPERATION}" \
+                                      --workspace-id "${EFFECTIVE_WORKSPACE_ID}" \
+                                      --user-id "${USER_ID}" \
+                                      --project-name "${BATCH_PROJECT_NAME}" \
+                                      --services-json "${BATCH_SERVICES_JSON}" \
+                                      --platform-domain "${PLATFORM_DOMAIN}" \
+                                      --commit-sha "workspace-${BUILD_NUMBER}" \
+                                      --build-number "${BUILD_NUMBER}" \
+                                      --skip-push true
+                                '''
+                            }
+
+                            withEnv(["BATCH_COMMIT_MESSAGE=${workspaceCommitMessage}"]) {
+                                sh '''
+                                    set -e
+                                    cd "$WORKSPACE/gitops-batch"
+                                    git add apps applications templates
+                                    if git diff --cached --quiet; then
+                                      echo "No batched GitOps changes required."
+                                      exit 0
+                                    fi
+                                    git commit -m "${BATCH_COMMIT_MESSAGE}" >/dev/null
                                     git push origin "${GITOPS_BRANCH}" >/dev/null
                                 '''
                             }
