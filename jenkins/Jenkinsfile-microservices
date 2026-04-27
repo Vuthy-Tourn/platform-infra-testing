@@ -342,6 +342,8 @@ pipeline {
                                     set -e
                                     cd "$WORKSPACE/gitops-batch"
                                     rm -f "$DESTROY_APPLICATION_FILE"
+                                    mkdir -p applications
+                                    touch applications/.gitkeep
                                     git add -A applications
                                     if git diff --cached --quiet; then
                                       echo "No destroy GitOps changes required."
