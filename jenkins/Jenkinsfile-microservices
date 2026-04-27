@@ -190,8 +190,8 @@ pipeline {
                             relationshipsToken : relationshipsToken,
                             dependsOn          : svc.dependsOn ?: [],
                             serviceType        : svc.serviceType?.toString()?.trim() ?: 'internal',
-                            exposePublic       : Boolean(svc.exposePublic),
-                            primaryPublic      : Boolean(svc.primaryPublic) || false,
+                            exposePublic       : (svc.exposePublic == true),
+                            primaryPublic      : (svc.exposePublic == true) && (svc.primaryPublic == true),
                             mergedEnvJson      : mergeEnvAndRelationships(
                                 svc.envJson?.toString()?.trim() ?: '[]',
                                 relationshipsToken
