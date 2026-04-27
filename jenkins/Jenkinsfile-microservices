@@ -300,6 +300,7 @@ pipeline {
                     def operation = params.DESTROY_MODE ? 'destroy' : (params.ROLLBACK_MODE ? 'rollback' : 'deploy')
                     def workspaceCommitMessage = "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
                     def destroyFinalizeCommitMessage = "destroy-finalize(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}): build=${env.BUILD_NUMBER}"
+                    def destroyCleanupCommitMessage = "destroy-cleanup(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}): build=${env.BUILD_NUMBER}"
                     def workspaceServicesJson = params.DESTROY_MODE
                         ? params.SERVICES_JSON.trim()
                         : servicesStateToJson(env.PLANNED_SERVICES_STATE)
@@ -370,15 +371,19 @@ pipeline {
 
                         if (params.DESTROY_MODE) {
                             withEnv([
+                                "DESTROY_APPLICATION_NAME=${slugify("${env.SAFE_STACK_NAME}-${env.SAFE_USER_ID}", 55)}",
                                 "DESTROY_APP_ROOT=apps/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}",
                                 "DESTROY_APPLICATION_FILE=applications/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}.yaml",
-                                "DESTROY_FINALIZE_COMMIT_MESSAGE=${destroyFinalizeCommitMessage}"
+                                "DESTROY_FINALIZE_COMMIT_MESSAGE=${destroyFinalizeCommitMessage}",
+                                "DESTROY_CLEANUP_COMMIT_MESSAGE=${destroyCleanupCommitMessage}"
                             ]) {
                                 sh '''
                                     set -e
                                     sleep 15
                                     cd "$WORKSPACE/gitops-batch"
-                                    rm -rf "$DESTROY_APP_ROOT"
+                                    # Keep the child application's source path around during finalize.
+                                    # Removing the app path before the parent prunes the child Application
+                                    # can leave Argo with a live Application pointing at a missing path.
                                     rm -f "$DESTROY_APPLICATION_FILE"
                                     git add -A apps applications
                                     if git diff --cached --quiet; then
@@ -386,6 +391,38 @@ pipeline {
                                       exit 0
                                     fi
                                     git commit -m "${DESTROY_FINALIZE_COMMIT_MESSAGE}" >/dev/null
+                                    git push origin "${GITOPS_BRANCH}" >/dev/null
+                                '''
+
+                                sh '''
+                                    set -e
+                                    if ! command -v kubectl >/dev/null 2>&1; then
+                                      echo "kubectl not available; leaving ${DESTROY_APP_ROOT} in Git for safe later cleanup."
+                                      exit 0
+                                    fi
+
+                                    attempts=36
+                                    while [ "$attempts" -gt 0 ]; do
+                                      if ! kubectl get applications.argoproj.io -n argocd "${DESTROY_APPLICATION_NAME}" >/dev/null 2>&1; then
+                                        break
+                                      fi
+                                      attempts=$((attempts - 1))
+                                      sleep 10
+                                    done
+
+                                    if kubectl get applications.argoproj.io -n argocd "${DESTROY_APPLICATION_NAME}" >/dev/null 2>&1; then
+                                      echo "Child Application ${DESTROY_APPLICATION_NAME} still exists; leaving ${DESTROY_APP_ROOT} in Git for safe later cleanup."
+                                      exit 0
+                                    fi
+
+                                    cd "$WORKSPACE/gitops-batch"
+                                    rm -rf "$DESTROY_APP_ROOT"
+                                    git add -A apps
+                                    if git diff --cached --quiet; then
+                                      echo "No destroy cleanup changes required."
+                                      exit 0
+                                    fi
+                                    git commit -m "${DESTROY_CLEANUP_COMMIT_MESSAGE}" >/dev/null
                                     git push origin "${GITOPS_BRANCH}" >/dev/null
                                 '''
                             }
