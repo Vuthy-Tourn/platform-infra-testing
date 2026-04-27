@@ -190,6 +190,8 @@ pipeline {
                             relationshipsToken : relationshipsToken,
                             dependsOn          : svc.dependsOn ?: [],
                             serviceType        : svc.serviceType?.toString()?.trim() ?: 'internal',
+                            exposePublic       : Boolean(svc.exposePublic),
+                            primaryPublic      : Boolean(svc.primaryPublic) || false,
                             mergedEnvJson      : mergeEnvAndRelationships(
                                 svc.envJson?.toString()?.trim() ?: '[]',
                                 relationshipsToken
@@ -805,7 +807,9 @@ def servicesStateToJson(String state) {
             svc.imageRepository ?: '',
             svc.imageTag ?: '',
             svc.mergedEnvJson ?: '[]',
-            svc.syncWave ?: '0'
+            svc.syncWave ?: '0',
+            (svc.exposePublic ? 'true' : 'false'),
+            (svc.primaryPublic ? 'true' : 'false')
         ].collect { value ->
             (value?.toString() ?: '')
                 .replace('\t', ' ')
@@ -828,7 +832,7 @@ with open(sys.argv[1], 'r', encoding='utf-8') as handle:
         if not line:
             continue
         columns = line.split('\\t')
-        while len(columns) < 9:
+        while len(columns) < 11:
             columns.append('')
         services.append({
             "name": columns[0],
@@ -840,6 +844,8 @@ with open(sys.argv[1], 'r', encoding='utf-8') as handle:
             "imageTag": columns[6],
             "envJson": columns[7] or "[]",
             "syncWave": columns[8] or "0",
+            "exposePublic": columns[9].lower() == "true",
+            "primaryPublic": columns[10].lower() == "true",
         })
 
 print(json.dumps(services, separators=(",", ":")))
@@ -869,7 +875,9 @@ def encodeServicesForState(List services) {
             svc.mergedEnvJson,
             ((svc.dependsOn ?: []).collect { it?.toString() ?: '' }.findAll { it }.join('\u001f')),
             svc.relationshipsToken,
-            svc.syncWave
+            svc.syncWave,
+            (svc.exposePublic ? 'true' : 'false'),
+            (svc.primaryPublic ? 'true' : 'false')
         ].collect { encodeStateField(it) }.join('\t')
     }.join('\n')
 }
@@ -899,7 +907,9 @@ def decodeServicesFromState(String state) {
                 ? columns[13].split('\u001f').findAll { it }
                 : [],
             relationshipsToken: columns.size() > 14 ? columns[14] : '',
-            syncWave          : columns.size() > 15 ? columns[15] : '0'
+            syncWave          : columns.size() > 15 ? columns[15] : '0',
+            exposePublic      : columns.size() > 16 ? columns[16].toBoolean() : false,
+            primaryPublic     : columns.size() > 17 ? columns[17].toBoolean() : false
         ]
     }
 }
