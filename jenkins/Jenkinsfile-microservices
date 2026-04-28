@@ -545,6 +545,8 @@ fields = [
     "imageRepository",
     "commitSha",
     "mergedEnvJson",
+    "exposePublic",
+    "primaryPublic",
 ]
 
 for svc in payload:
@@ -589,8 +591,10 @@ PY""",
                 imageRepository   : columns[10],
                 commitSha         : columns[11],
                 mergedEnvJson     : columns[12],
-                dependsOn         : columns[13] ? columns[13].split('\u001f').findAll { it } : [],
-                relationshipsToken: columns[14]
+                exposePublic      : columns[13]?.toBoolean(),
+                primaryPublic     : columns[14]?.toBoolean(),
+                dependsOn         : columns[15] ? columns[15].split('\u001f').findAll { it } : [],
+                relationshipsToken: columns[16]
             ]
         }
     } finally {
