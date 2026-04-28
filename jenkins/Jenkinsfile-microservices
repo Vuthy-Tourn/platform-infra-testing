@@ -313,7 +313,6 @@ pipeline {
                         sh '''
                             set -e
                             test -f "$WORKSPACE/platform-infra/jenkins/scripts/update-gitops.sh"
-                            rm -rf "$WORKSPACE/gitops-batch"
                             AUTHED_GITOPS_REPO_URL="${GITOPS_REPO_URL}"
                             case "$AUTHED_GITOPS_REPO_URL" in
                               https://*)
@@ -323,7 +322,16 @@ pipeline {
                                 AUTHED_GITOPS_REPO_URL="$(printf '%s' "$AUTHED_GITOPS_REPO_URL" | sed "s#^http://#http://${GITOPS_USERNAME}:${GITOPS_TOKEN}@#")"
                                 ;;
                             esac
-                            git clone --branch "${GITOPS_BRANCH}" --depth 1 "${AUTHED_GITOPS_REPO_URL}" "$WORKSPACE/gitops-batch" >/dev/null
+                            if [ -d "$WORKSPACE/gitops-batch/.git" ]; then
+                              git -C "$WORKSPACE/gitops-batch" remote set-url origin "${AUTHED_GITOPS_REPO_URL}"
+                              git -C "$WORKSPACE/gitops-batch" fetch --depth 1 origin "${GITOPS_BRANCH}" >/dev/null
+                              git -C "$WORKSPACE/gitops-batch" checkout -f "${GITOPS_BRANCH}" >/dev/null
+                              git -C "$WORKSPACE/gitops-batch" reset --hard "origin/${GITOPS_BRANCH}" >/dev/null
+                              git -C "$WORKSPACE/gitops-batch" clean -fd >/dev/null
+                            else
+                              rm -rf "$WORKSPACE/gitops-batch"
+                              git clone --branch "${GITOPS_BRANCH}" --depth 1 "${AUTHED_GITOPS_REPO_URL}" "$WORKSPACE/gitops-batch" >/dev/null
+                            fi
                             git -C "$WORKSPACE/gitops-batch" config user.email "jenkins@platform.local"
                             git -C "$WORKSPACE/gitops-batch" config user.name "${GITOPS_USERNAME}"
                             git -C "$WORKSPACE/gitops-batch" remote set-url origin "${AUTHED_GITOPS_REPO_URL}"
@@ -436,11 +444,7 @@ pipeline {
         }
         always {
             script {
-                if (getContext(hudson.FilePath)) {
-                    cleanWs()
-                } else {
-                    echo 'Skipping workspace cleanup because no workspace is active.'
-                }
+                echo 'Keeping workspace on disk to allow Git and build cache reuse between runs.'
             }
         }
     }
@@ -966,7 +970,6 @@ def resolveCommitAndFramework(def svc, String branch, String safeProjectName, in
     def resolvedFramework = frameworkOverride
 
     dir("service-plan/${index}-${safeProjectName}") {
-        deleteDir()
         if (svc.repoCredentialsId?.toString()?.trim()) {
             checkout([
                 $class: 'GitSCM',
@@ -979,6 +982,13 @@ def resolveCommitAndFramework(def svc, String branch, String safeProjectName, in
         } else {
             git url: resolvedRepoUrl, branch: branch
         }
+
+        sh '''
+            if [ -d .git ]; then
+              git reset --hard >/dev/null
+              git clean -fd >/dev/null
+            fi
+        '''
 
         resolvedCommitSha = sh(
             script: 'git rev-parse --short=12 HEAD',

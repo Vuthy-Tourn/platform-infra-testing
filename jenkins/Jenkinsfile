@@ -402,11 +402,7 @@ pipeline {
         }
         always {
             script {
-                if (getContext(hudson.FilePath)) {
-                    cleanWs()
-                } else {
-                    echo 'Skipping workspace cleanup because no workspace is active.'
-                }
+                echo 'Keeping workspace on disk to allow Git and build cache reuse between runs.'
             }
         }
     }
