@@ -354,24 +354,8 @@ pipeline {
 
                                 sh '''
                                     set -e
-                                    if ! command -v kubectl >/dev/null 2>&1; then
-                                      echo "kubectl not available; leaving ${DESTROY_APP_ROOT} in Git for safe later cleanup."
-                                      exit 0
-                                    fi
-
-                                    attempts=36
-                                    while [ "$attempts" -gt 0 ]; do
-                                      if ! kubectl get applications.argoproj.io -n argocd "${DESTROY_APPLICATION_NAME}" >/dev/null 2>&1; then
-                                        break
-                                      fi
-                                      attempts=$((attempts - 1))
-                                      sleep 10
-                                    done
-
-                                    if kubectl get applications.argoproj.io -n argocd "${DESTROY_APPLICATION_NAME}" >/dev/null 2>&1; then
-                                      echo "Child Application ${DESTROY_APPLICATION_NAME} still exists; leaving ${DESTROY_APP_ROOT} in Git for safe later cleanup."
-                                      exit 0
-                                    fi
+                                    echo "Waiting 90 seconds before removing ${DESTROY_APP_ROOT} from Git."
+                                    sleep 90
 
                                     cd "$WORKSPACE/gitops-batch"
                                     rm -rf "$DESTROY_APP_ROOT"
