@@ -203,6 +203,9 @@ pipeline {
                         ]
                     }
 
+                    echo "Public exposure plan: ${plannedServices.collect { svc ->
+                        "${svc.name}:${svc.serviceType}:expose=${svc.exposePublic}:primary=${svc.primaryPublic}"
+                    }.join(', ')}"
                     env.PLANNED_SERVICES_STATE = encodeServicesForState(plannedServices)
                     echo "Prepared release plan for ${plannedServices.size()} service(s)"
                 }
@@ -305,6 +308,10 @@ pipeline {
                     def workspaceServicesJson = params.DESTROY_MODE
                         ? params.SERVICES_JSON.trim()
                         : servicesStateToJson(env.PLANNED_SERVICES_STATE)
+
+                    echo "GitOps input flags: ${services.collect { svc ->
+                        "${svc.name}:${svc.serviceType}:expose=${svc.exposePublic}:primary=${svc.primaryPublic}"
+                    }.join(', ')}"
 
                     withCredentials([usernamePassword(
                         credentialsId: 'gitops-micro-creds',
