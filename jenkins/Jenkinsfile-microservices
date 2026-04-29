@@ -199,6 +199,7 @@ pipeline {
                             imageRepository    : imageRepository,
                             commitSha          : commitSha,
                             customDomain       : svc.customDomain?.toString()?.trim() ?: '',
+                            platformHostOverride: svc.platformHostOverride?.toString()?.trim() ?: '',
                             syncWave           : (syncWaveByService[serviceName] ?: 0).toString()
                         ]
                     }
@@ -542,6 +543,7 @@ fields = [
     "envJson",
     "serviceType",
     "customDomain",
+    "platformHostOverride",
     "imageRepository",
     "commitSha",
     "mergedEnvJson",
@@ -588,13 +590,14 @@ PY""",
                 envJson           : columns[7],
                 serviceType       : columns[8],
                 customDomain      : columns[9],
-                imageRepository   : columns[10],
-                commitSha         : columns[11],
-                mergedEnvJson     : columns[12],
-                exposePublic      : columns[13]?.toBoolean(),
-                primaryPublic     : columns[14]?.toBoolean(),
-                dependsOn         : columns[15] ? columns[15].split('\u001f').findAll { it } : [],
-                relationshipsToken: columns[16]
+                platformHostOverride: columns[10],
+                imageRepository   : columns[11],
+                commitSha         : columns[12],
+                mergedEnvJson     : columns[13],
+                exposePublic      : columns[14]?.toBoolean(),
+                primaryPublic     : columns[15]?.toBoolean(),
+                dependsOn         : columns[16] ? columns[16].split('\u001f').findAll { it } : [],
+                relationshipsToken: columns[17]
             ]
         }
     } finally {
@@ -792,6 +795,7 @@ def servicesStateToJson(String state) {
             svc.appPort ?: '',
             svc.serviceType ?: '',
             svc.customDomain ?: '',
+            svc.platformHostOverride ?: '',
             svc.imageRepository ?: '',
             svc.imageTag ?: '',
             svc.mergedEnvJson ?: '[]',
@@ -820,7 +824,7 @@ with open(sys.argv[1], 'r', encoding='utf-8') as handle:
         if not line:
             continue
         columns = line.split('\\t')
-        while len(columns) < 11:
+        while len(columns) < 12:
             columns.append('')
         services.append({
             "name": columns[0],
@@ -828,12 +832,13 @@ with open(sys.argv[1], 'r', encoding='utf-8') as handle:
             "appPort": columns[2],
             "serviceType": columns[3] or "internal",
             "customDomain": columns[4],
-            "imageRepository": columns[5],
-            "imageTag": columns[6],
-            "envJson": columns[7] or "[]",
-            "syncWave": columns[8] or "0",
-            "exposePublic": columns[9].lower() == "true",
-            "primaryPublic": columns[10].lower() == "true",
+            "platformHostOverride": columns[5],
+            "imageRepository": columns[6],
+            "imageTag": columns[7],
+            "envJson": columns[8] or "[]",
+            "syncWave": columns[9] or "0",
+            "exposePublic": columns[10].lower() == "true",
+            "primaryPublic": columns[11].lower() == "true",
         })
 
 print(json.dumps(services, separators=(",", ":")))
@@ -858,6 +863,7 @@ def encodeServicesForState(List services) {
             svc.envJson,
             svc.serviceType,
             svc.customDomain,
+            svc.platformHostOverride,
             svc.imageRepository,
             svc.commitSha,
             svc.mergedEnvJson,
@@ -888,16 +894,17 @@ def decodeServicesFromState(String state) {
             envJson           : columns.size() > 7 ? columns[7] : '',
             serviceType       : columns.size() > 8 ? columns[8] : '',
             customDomain      : columns.size() > 9 ? columns[9] : '',
-            imageRepository   : columns.size() > 10 ? columns[10] : '',
-            commitSha         : columns.size() > 11 ? columns[11] : '',
-            mergedEnvJson     : columns.size() > 12 ? columns[12] : '',
-            dependsOn         : (columns.size() > 13 && columns[13])
-                ? columns[13].split('\u001f').findAll { it }
+            platformHostOverride: columns.size() > 10 ? columns[10] : '',
+            imageRepository   : columns.size() > 11 ? columns[11] : '',
+            commitSha         : columns.size() > 12 ? columns[12] : '',
+            mergedEnvJson     : columns.size() > 13 ? columns[13] : '',
+            dependsOn         : (columns.size() > 14 && columns[14])
+                ? columns[14].split('\u001f').findAll { it }
                 : [],
-            relationshipsToken: columns.size() > 14 ? columns[14] : '',
-            syncWave          : columns.size() > 15 ? columns[15] : '0',
-            exposePublic      : columns.size() > 16 ? columns[16].toBoolean() : false,
-            primaryPublic     : columns.size() > 17 ? columns[17].toBoolean() : false
+            relationshipsToken: columns.size() > 15 ? columns[15] : '',
+            syncWave          : columns.size() > 16 ? columns[16] : '0',
+            exposePublic      : columns.size() > 17 ? columns[17].toBoolean() : false,
+            primaryPublic     : columns.size() > 18 ? columns[18].toBoolean() : false
         ]
     }
 }

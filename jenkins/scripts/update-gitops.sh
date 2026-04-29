@@ -240,7 +240,8 @@ for svc in services:
         raise SystemExit(f"Service '{name}' is missing image repository or tag.")
 
     custom_domain = str(svc.get("customDomain") or "").strip()
-    host = custom_domain or f"{slugify(project_name, 24)}-{slugify(name, 24)}-{workspace_id}.{platform_domain}"
+    platform_host_override = str(svc.get("platformHostOverride") or "").strip()
+    host = custom_domain or platform_host_override or f"{slugify(project_name, 24)}-{slugify(name, 24)}-{workspace_id}.{platform_domain}"
     env_json = str(svc.get("envJson") or "[]").strip() or "[]"
     sync_wave = int(svc.get("syncWave") or 0)
     p_mode = probe_mode(framework)
