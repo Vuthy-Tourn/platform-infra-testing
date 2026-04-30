@@ -28,6 +28,7 @@ pipeline {
         booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Rollback all services to saved image tags')
         booleanParam(name: 'DESTROY_MODE', defaultValue: false, description: 'Remove this microservice project from GitOps and tear down its runtime resources')
         string(name: 'SERVICES_JSON', defaultValue: '[]', description: 'JSON array of service descriptors')
+        string(name: 'CHANGED_SERVICES', defaultValue: '', description: 'Optional comma-separated service names to rebuild during webhook-triggered updates')
     }
 
     environment {
@@ -217,8 +218,19 @@ pipeline {
                 script {
                     def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
                     def failures = []
+                    def changedServiceNames = parseServiceSelection(params.CHANGED_SERVICES)
+                    def selectiveBuild = !params.ROLLBACK_MODE && !params.DESTROY_MODE && !changedServiceNames.isEmpty()
+
+                    if (selectiveBuild) {
+                        echo "Selective rebuild enabled for service(s): ${changedServiceNames.join(', ')}"
+                    }
 
                     services.each { svc ->
+                        if (selectiveBuild && !changedServiceNames.contains(svc.name?.toString()?.trim())) {
+                            echo "=== Skipping unchanged service: ${svc.name} ==="
+                            return
+                        }
+
                         echo "=== Building service: ${svc.name} (type: ${svc.serviceType}) ==="
                         echo "[service:${svc.name}] Triggering child job '${params.SERVICE_JOB_NAME}'"
 
@@ -603,6 +615,18 @@ PY""",
     } finally {
         sh "rm -f '${tempFile}'"
     }
+}
+
+def parseServiceSelection(String rawValue) {
+    if (!rawValue?.trim()) {
+        return [] as Set
+    }
+
+    rawValue
+        .split(',')
+        .collect { it?.toString()?.trim() }
+        .findAll { it }
+        .toSet()
 }
 
 def mergeEnvAndRelationships(String envJson, String relationshipsToken) {
