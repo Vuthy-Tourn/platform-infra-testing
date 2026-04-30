@@ -1,7 +1,7 @@
 @Library('share_lib@master') _
 
 pipeline {
-    agent none
+    agent any
 
     options {
         timeout(time: 20, unit: 'MINUTES')
@@ -31,7 +31,6 @@ pipeline {
 
     stages {
         stage('Validate input') {
-            agent { label 'master' }
             steps {
                 script {
                     if (!params.REPO_URL?.trim()) {
@@ -104,8 +103,7 @@ pipeline {
             }
         }
 
-        stage('Checkout infra') {
-            agent { label 'master' }
+        stage('Checkout infra') {  
             steps {
                 dir('platform-infra') {
                     checkout([
@@ -124,7 +122,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent { label 'master' }
             steps {
                 dir('user-app') {
                     script {
@@ -166,7 +163,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent { label 'master' }
             steps {
                 dir('user-app') {
                     script {
@@ -199,7 +195,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent { label 'master' }
             steps {
                 dir('user-app') {
                     sh '''
@@ -231,7 +226,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent { label 'master' }
             steps {
                 script {
                     // Re-checkout infra (for scripts + helm chart)
