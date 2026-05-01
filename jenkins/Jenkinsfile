@@ -3,10 +3,6 @@
 pipeline {
     agent none
 
-    tools {
-        jdk 'jdk21'
-    }
-
     options {
         timeout(time: 20, unit: 'MINUTES')
         timestamps()
@@ -269,17 +265,26 @@ pipeline {
                         if (env.JAVA_TOOLCHAIN_VERSION?.trim()) {
                             def jdkPrefix = params.SONARQUBE_JDK_TOOL_PREFIX?.trim() ?: 'jdk'
                             def toolName = "${jdkPrefix}${env.JAVA_TOOLCHAIN_VERSION.trim()}"
+                            def javaHome
                             try {
-                                def javaHome = tool name: toolName, type: 'hudson.model.JDK'
-                                withEnv([
-                                    "JAVA_HOME=${javaHome}",
-                                    "PATH=${javaHome}/bin:${env.PATH}"
-                                ]) {
-                                    sh 'java -version'
-                                    sonarWork()
-                                }
+                                javaHome = tool name: toolName, type: 'hudson.model.JDK'
                             } catch (Exception ex) {
                                 error("Java ${env.JAVA_TOOLCHAIN_VERSION} is required for SonarQube analysis, but Jenkins JDK tool '${toolName}' is not configured on this node.")
+                            }
+
+                            withEnv([
+                                "JAVA_HOME=${javaHome}",
+                                "PATH=${javaHome}/bin:${env.PATH}",
+                                "ORG_GRADLE_JAVA_HOME=${javaHome}",
+                                "ORG_GRADLE_JAVA_INSTALLATIONS_PATHS=${javaHome}"
+                            ]) {
+                                sh '''
+                                    java -version
+                                    if command -v javac >/dev/null 2>&1; then
+                                      javac -version
+                                    fi
+                                '''
+                                sonarWork()
                             }
                         } else {
                             sonarWork()

@@ -11,10 +11,6 @@
 pipeline {
     agent { label 'master' }
 
-    tools {
-        jdk 'jdk21'
-    }
-
     options {
         timeout(time: 90, unit: 'MINUTES')
         timestamps()
