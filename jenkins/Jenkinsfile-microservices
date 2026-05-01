@@ -11,6 +11,10 @@
 pipeline {
     agent { label 'master' }
 
+    tools {
+        jdk 'jdk21'
+    }
+
     options {
         timeout(time: 90, unit: 'MINUTES')
         timestamps()
@@ -26,6 +30,7 @@ pipeline {
         string(name: 'SERVICE_JOB_NAME', defaultValue: 'deploy-service-test', description: 'Jenkins job name used to deploy one service')
         string(name: 'SONARQUBE_SERVER_NAME', defaultValue: 'sonarqube', description: 'Jenkins SonarQube server configuration name')
         string(name: 'SONARQUBE_SCANNER_TOOL', defaultValue: '', description: 'Optional Jenkins SonarScanner tool name; empty uses sonar-scanner from PATH')
+        string(name: 'SONARQUBE_JDK_TOOL_PREFIX', defaultValue: 'jdk', description: 'Jenkins JDK tool name prefix used for Java SonarQube analysis (example: jdk -> jdk21)')
         booleanParam(name: 'ENABLE_GITOPS_UPDATE', defaultValue: true, description: 'Update GitOps repository once after all service builds succeed')
         booleanParam(name: 'ENABLE_SONARQUBE_SCAN', defaultValue: true, description: 'Run SonarQube source analysis for each changed service')
         booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', defaultValue: false, description: 'Wait for SonarQube quality gate before continuing each service build')
@@ -253,6 +258,7 @@ pipeline {
                                     string(name: 'REPO_CREDENTIALS_ID', value: svc.repoCredentialsId),
                                     string(name: 'SONARQUBE_SERVER_NAME', value: params.SONARQUBE_SERVER_NAME),
                                     string(name: 'SONARQUBE_SCANNER_TOOL', value: params.SONARQUBE_SCANNER_TOOL),
+                                    string(name: 'SONARQUBE_JDK_TOOL_PREFIX', value: params.SONARQUBE_JDK_TOOL_PREFIX),
                                     booleanParam(name: 'ENABLE_SONARQUBE_SCAN', value: params.ENABLE_SONARQUBE_SCAN),
                                     booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', value: params.ENABLE_SONARQUBE_QUALITY_GATE),
                                     booleanParam(name: 'ROLLBACK_MODE', value: params.ROLLBACK_MODE)
