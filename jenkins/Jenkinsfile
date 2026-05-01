@@ -1,4 +1,4 @@
-@Library('share_lib@master') _
+@Library(['share_lib@master', 'a8s-sonarqube@main']) _
 
 pipeline {
     agent none
@@ -20,6 +20,10 @@ pipeline {
         string(name: 'IMAGE_TAG', defaultValue: '', description: 'Optional image tag provided by backend (deploy or rollback)')
         string(name: 'FRAMEWORK', defaultValue: '', description: 'Optional framework override provided by backend')
         string(name: 'REPO_CREDENTIALS_ID', defaultValue: '', description: 'Optional Jenkins credential id for private user repositories')
+        string(name: 'SONARQUBE_SERVER_NAME', defaultValue: 'sonarqube', description: 'Jenkins SonarQube server configuration name')
+        string(name: 'SONARQUBE_SCANNER_TOOL', defaultValue: '', description: 'Optional Jenkins SonarScanner tool name; empty uses sonar-scanner from PATH')
+        booleanParam(name: 'ENABLE_SONARQUBE_SCAN', defaultValue: true, description: 'Run SonarQube source analysis')
+        booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', defaultValue: false, description: 'Wait for SonarQube quality gate before build')
         booleanParam(name: 'ENABLE_TRIVY_SCAN', defaultValue: true, description: 'Run local Trivy image scan')
         booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Skip build/scan/push and update GitOps with a saved image tag')
     }
@@ -192,6 +196,42 @@ pipeline {
                         echo "Detected framework: ${env.FRAMEWORK}"
                     }
                 }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            when {
+                expression { return !params.ROLLBACK_MODE && params.ENABLE_SONARQUBE_SCAN }
+            }
+            agent { label 'master' }
+            steps {
+                dir('user-app') {
+                    script {
+                        a8sSonarScan(
+                            server: params.SONARQUBE_SERVER_NAME?.trim() ?: 'sonarqube',
+                            scannerTool: params.SONARQUBE_SCANNER_TOOL?.trim(),
+                            projectKey: "${env.SAFE_WORKSPACE_ID}-${env.SAFE_PROJECT_NAME}",
+                            projectName: env.EFFECTIVE_PROJECT_NAME,
+                            projectVersion: env.APP_COMMIT_SHA,
+                            sources: '.',
+                            exclusions: '**/node_modules/**,**/.next/**,**/dist/**,**/build/**,**/target/**,**/vendor/**,**/.git/**'
+                        )
+                    }
+                }
+            }
+        }
+
+        stage('SonarQube Quality Gate') {
+            when {
+                expression {
+                    return !params.ROLLBACK_MODE &&
+                        params.ENABLE_SONARQUBE_SCAN &&
+                        params.ENABLE_SONARQUBE_QUALITY_GATE
+                }
+            }
+            agent { label 'master' }
+            steps {
+                a8sSonarQualityGate(timeoutMinutes: 5, abortPipeline: true)
             }
         }
 
