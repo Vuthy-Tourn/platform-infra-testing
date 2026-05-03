@@ -368,7 +368,6 @@ spec:
     repoURL: "${manifest_repo}"
     targetRevision: "${gitops_branch}"
     path: "${source_path}"
-    kustomize: {}
   syncPolicy:
     automated:
       prune: true
