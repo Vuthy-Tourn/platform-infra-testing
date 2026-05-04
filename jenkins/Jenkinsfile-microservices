@@ -390,55 +390,69 @@ pipeline {
                                         passwordVariable: 'ARGOCD_PASSWORD'
                                     )
                                 ]) {
-                                    sh '''
-                                        set -e
-                                        APP_NAME="${DESTROY_APPLICATION_NAME}"
-                                        TIMEOUT=600
-                                        ELAPSED=0
-                                        INTERVAL=15
+                                   sh '''
+                                    set -e
+                                    APP_NAME="${DESTROY_APPLICATION_NAME}"
+                                    TIMEOUT=600
+                                    ELAPSED=0
+                                    INTERVAL=15
 
-                                        echo "Logging in to ArgoCD to get session token..."
-                                        ARGOCD_TOKEN=$(curl -sk \
-                                            -X POST \
-                                            -H "Content-Type: application/json" \
-                                            -d "{\"username\":\"${ARGOCD_USERNAME}\",\"password\":\"${ARGOCD_PASSWORD}\"}" \
-                                            "https://${ARGOCD_SERVER}/api/v1/session" \
-                                            | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+                                    echo "Logging in to ArgoCD to get session token..."
 
-                                        if [ -z "$ARGOCD_TOKEN" ]; then
-                                            echo "ERROR: Failed to get ArgoCD session token." >&2
+                                    # Write credentials to a temp file to avoid shell quoting issues with special characters
+                                    python3 -c "
+                                import json, os
+                                body = json.dumps({'username': os.environ['ARGOCD_USERNAME'], 'password': os.environ['ARGOCD_PASSWORD']})
+                                with open('/tmp/.argocd-login.json', 'w') as f:
+                                    f.write(body)
+                                "
+
+                                    RAW_RESPONSE=$(curl -sk \
+                                        -X POST \
+                                        -H "Content-Type: application/json" \
+                                        -d "@/tmp/.argocd-login.json" \
+                                        "https://${ARGOCD_SERVER}/api/v1/session")
+
+                                    rm -f /tmp/.argocd-login.json
+
+                                    echo "ArgoCD login response code: $(echo "$RAW_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('ok' if 'token' in d else d.get('message','unknown error'))" 2>/dev/null || echo 'invalid JSON')"
+
+                                    ARGOCD_TOKEN=$(echo "$RAW_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])" 2>/dev/null || true)
+
+                                    if [ -z "$ARGOCD_TOKEN" ]; then
+                                        echo "ERROR: Failed to get ArgoCD session token. Raw response: ${RAW_RESPONSE}" >&2
+                                        exit 1
+                                    fi
+
+                                    echo "Polling ArgoCD API for application '${APP_NAME}' deletion..."
+                                    while true; do
+                                        HTTP_STATUS=$(curl -sk \
+                                            -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
+                                            "https://${ARGOCD_SERVER}/api/v1/applications/${APP_NAME}" \
+                                            -o /dev/null \
+                                            -w "%{http_code}")
+
+                                        echo "[${ELAPSED}s] ArgoCD responded HTTP ${HTTP_STATUS}"
+
+                                        if [ "$HTTP_STATUS" = "404" ]; then
+                                            echo "Application '${APP_NAME}' fully deleted. Proceeding to manifest cleanup."
+                                            break
+                                        fi
+
+                                        if [ "$HTTP_STATUS" = "401" ]; then
+                                            echo "ERROR: ArgoCD session expired or invalid." >&2
                                             exit 1
                                         fi
 
-                                        echo "Polling ArgoCD API for application '${APP_NAME}' deletion..."
-                                        while true; do
-                                            HTTP_STATUS=$(curl -sk \
-                                                -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
-                                                "https://${ARGOCD_SERVER}/api/v1/applications/${APP_NAME}" \
-                                                -o /dev/null \
-                                                -w "%{http_code}")
+                                        if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+                                            echo "ERROR: Timed out after ${TIMEOUT}s waiting for deletion." >&2
+                                            exit 1
+                                        fi
 
-                                            echo "[${ELAPSED}s] ArgoCD responded HTTP ${HTTP_STATUS}"
-
-                                            if [ "$HTTP_STATUS" = "404" ]; then
-                                                echo "Application '${APP_NAME}' fully deleted. Proceeding to manifest cleanup."
-                                                break
-                                            fi
-
-                                            if [ "$HTTP_STATUS" = "401" ]; then
-                                                echo "ERROR: ArgoCD session expired or invalid." >&2
-                                                exit 1
-                                            fi
-
-                                            if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-                                                echo "ERROR: Timed out after ${TIMEOUT}s waiting for deletion." >&2
-                                                exit 1
-                                            fi
-
-                                            sleep "$INTERVAL"
-                                            ELAPSED=$((ELAPSED + INTERVAL))
-                                        done
-                                    '''
+                                        sleep "$INTERVAL"
+                                        ELAPSED=$((ELAPSED + INTERVAL))
+                                    done
+                                '''
                                 }
 
                                 sh '''
