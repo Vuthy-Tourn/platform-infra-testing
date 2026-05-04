@@ -382,18 +382,77 @@ pipeline {
                                     git commit -m "${BATCH_COMMIT_MESSAGE}" >/dev/null
                                     git push origin "${GITOPS_BRANCH}" >/dev/null
                                 '''
+                                withCredentials([
+                                    string(credentialsId: 'argocd-server-url', variable: 'ARGOCD_SERVER'),
+                                    usernamePassword(
+                                        credentialsId: 'argocd-creds',
+                                        usernameVariable: 'ARGOCD_USERNAME',
+                                        passwordVariable: 'ARGOCD_PASSWORD'
+                                    )
+                                ]) {
+                                    sh '''
+                                        set -e
+                                        APP_NAME="${DESTROY_APPLICATION_NAME}"
+                                        TIMEOUT=600
+                                        ELAPSED=0
+                                        INTERVAL=15
+
+                                        echo "Logging in to ArgoCD to get session token..."
+                                        ARGOCD_TOKEN=$(curl -sk \
+                                            -X POST \
+                                            -H "Content-Type: application/json" \
+                                            -d "{\"username\":\"${ARGOCD_USERNAME}\",\"password\":\"${ARGOCD_PASSWORD}\"}" \
+                                            "https://${ARGOCD_SERVER}/api/v1/session" \
+                                            | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+
+                                        if [ -z "$ARGOCD_TOKEN" ]; then
+                                            echo "ERROR: Failed to get ArgoCD session token." >&2
+                                            exit 1
+                                        fi
+
+                                        echo "Polling ArgoCD API for application '${APP_NAME}' deletion..."
+                                        while true; do
+                                            HTTP_STATUS=$(curl -sk \
+                                                -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
+                                                "https://${ARGOCD_SERVER}/api/v1/applications/${APP_NAME}" \
+                                                -o /dev/null \
+                                                -w "%{http_code}")
+
+                                            echo "[${ELAPSED}s] ArgoCD responded HTTP ${HTTP_STATUS}"
+
+                                            if [ "$HTTP_STATUS" = "404" ]; then
+                                                echo "Application '${APP_NAME}' fully deleted. Proceeding to manifest cleanup."
+                                                break
+                                            fi
+
+                                            if [ "$HTTP_STATUS" = "401" ]; then
+                                                echo "ERROR: ArgoCD session expired or invalid." >&2
+                                                exit 1
+                                            fi
+
+                                            if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+                                                echo "ERROR: Timed out after ${TIMEOUT}s waiting for deletion." >&2
+                                                exit 1
+                                            fi
+
+                                            sleep "$INTERVAL"
+                                            ELAPSED=$((ELAPSED + INTERVAL))
+                                        done
+                                    '''
+                                }
 
                                 sh '''
                                     set -e
-                                    echo "Waiting 90 seconds before removing ${DESTROY_APP_ROOT} from Git."
-                                    sleep 90
-
                                     cd "$WORKSPACE/gitops-batch"
+
+                                    git fetch --depth 1 origin "${GITOPS_BRANCH}" >/dev/null
+                                    git reset --hard "origin/${GITOPS_BRANCH}" >/dev/null
+
                                     rm -rf "$DESTROY_APP_ROOT"
                                     git add -A apps
                                     if git diff --cached --quiet; then
-                                      echo "No destroy cleanup changes required."
-                                      exit 0
+                                    echo "No destroy cleanup changes required."
+                                    exit 0
                                     fi
                                     git commit -m "${DESTROY_CLEANUP_COMMIT_MESSAGE}" >/dev/null
                                     git push origin "${GITOPS_BRANCH}" >/dev/null
