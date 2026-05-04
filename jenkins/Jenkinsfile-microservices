@@ -368,36 +368,55 @@ pipeline {
                                 "BATCH_COMMIT_MESSAGE=${workspaceCommitMessage}",
                                 "DESTROY_CLEANUP_COMMIT_MESSAGE=${destroyCleanupCommitMessage}"
                             ]) {
+                              withCredentials([
+                                string(credentialsId: 'argocd-server-url', variable: 'ARGOCD_SERVER'),
+                                usernamePassword(
+                                    credentialsId: 'argocd-creds',
+                                    usernameVariable: 'ARGOCD_USERNAME',
+                                    passwordVariable: 'ARGOCD_PASSWORD'
+                                )
+                            ]) {
                                 sh '''
                                     set -e
-                                    cd "$WORKSPACE/gitops-batch"
-                                    rm -f "$DESTROY_APPLICATION_FILE"
-                                    mkdir -p applications
-                                    touch applications/.gitkeep
-                                    git add -A applications
-                                    if git diff --cached --quiet; then
-                                      echo "No destroy GitOps changes required."
-                                      exit 0
-                                    fi
-                                    git commit -m "${BATCH_COMMIT_MESSAGE}" >/dev/null
-                                    git push origin "${GITOPS_BRANCH}" >/dev/null
-                                '''
 
-                                sh '''
-                                    set -e
-                                    echo "Waiting 90 seconds before removing ${DESTROY_APP_ROOT} from Git."
-                                    sleep 90
+                                    # Step 2a — login to get a session token
+                                    ARGOCD_AUTH_TOKEN=$(curl -s --insecure \
+                                        -X POST \
+                                        -H "Content-Type: application/json" \
+                                        -d "{\\"username\\":\\"${ARGOCD_USERNAME}\\",\\"password\\":\\"${ARGOCD_PASSWORD}\\"}" \
+                                        "https://${ARGOCD_SERVER}/api/v1/session" \
+                                        | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))")
 
-                                    cd "$WORKSPACE/gitops-batch"
-                                    rm -rf "$DESTROY_APP_ROOT"
-                                    git add -A apps
-                                    if git diff --cached --quiet; then
-                                      echo "No destroy cleanup changes required."
-                                      exit 0
+                                    if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
+                                        echo "ERROR: Failed to obtain ArgoCD token — check argocd-creds credentials."
+                                        exit 1
                                     fi
-                                    git commit -m "${DESTROY_CLEANUP_COMMIT_MESSAGE}" >/dev/null
-                                    git push origin "${GITOPS_BRANCH}" >/dev/null
+
+                                    # Step 2b — poll until app is gone
+                                    echo "Waiting for ArgoCD to confirm deletion of ${DESTROY_APPLICATION_NAME}..."
+                                    DEADLINE=$(( $(date +%s) + 300 ))
+
+                                    while true; do
+                                        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                                            -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
+                                            --insecure \
+                                            "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}")
+
+                                        if [ "$HTTP_CODE" = "404" ]; then
+                                            echo "Application confirmed deleted (404)."
+                                            break
+                                        fi
+
+                                        if [ $(date +%s) -gt $DEADLINE ]; then
+                                            echo "WARNING: Timed out after 5 minutes — proceeding anyway."
+                                            break
+                                        fi
+
+                                        echo "HTTP ${HTTP_CODE} — still exists, retrying in 10s"
+                                        sleep 10
+                                    done
                                 '''
+                            }
                             }
                         } else {
                             withEnv([
