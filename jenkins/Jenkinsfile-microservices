@@ -242,7 +242,7 @@ pipeline {
 
         stage('Build and push services') {
             when {
-                expression { return !params.DESTROY_MODE }
+                expression { return !params.DESTROY_MODE && !params.ROLLBACK_MODE }
             }
             steps {
                 script {
@@ -338,7 +338,7 @@ pipeline {
 
         stage('Update GitOps repository (batched)') {
             when {
-                expression { return params.ENABLE_GITOPS_UPDATE || params.DESTROY_MODE }
+                expression { return params.ENABLE_GITOPS_UPDATE || params.DESTROY_MODE || params.ROLLBACK_MODE }
             }
 
             steps {
@@ -355,6 +355,10 @@ pipeline {
                     def operation = params.DESTROY_MODE
                         ? 'destroy'
                         : (params.ROLLBACK_MODE ? 'rollback' : 'deploy')
+
+                    if (params.ROLLBACK_MODE) {
+                        echo "Rollback mode: skipping child build jobs and updating GitOps to saved image tags only."
+                    }
 
                     def workspaceCommitMessage =
                         "${operation}(workspace/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}): ${services.size()} service(s) build=${env.BUILD_NUMBER}"
