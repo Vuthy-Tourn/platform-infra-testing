@@ -1,12 +1,11 @@
 /**
  * Microservices Orchestrator Pipeline
  *
- * Best-practice test flow:
- *   1. Resolve one release plan for all services.
- *   2. Build / scan / push each service independently.
- *   3. If GitOps is enabled, batch all service manifest updates into one commit.
- *
- * This keeps one service per deployable unit while avoiding one GitOps push per service.
+ * Performance improvements applied:
+ *   1. platform-infra is stashed after 'Checkout infra' — no re-checkout in GitOps stage.
+ *   2. resolveCommitAndFramework runs in parallel across all services in 'Prepare release plan'.
+ *   3. 'Build and push services' triggers all child jobs in parallel instead of sequentially.
+ *   4. gitops-batch uses fetch+reset when the dir already exists (preserved from prior runs).
  */
 pipeline {
     agent { label 'master' }
@@ -124,6 +123,8 @@ pipeline {
                         returnStdout: true
                     ).trim()
                 }
+                // Stash infra once — reused in GitOps stage without re-checkout
+                stash name: 'platform-infra-src', includes: 'platform-infra/**'
             }
         }
 
@@ -147,8 +148,36 @@ pipeline {
                 script {
                     def services = decodeServicesFromState(env.ORDERED_SERVICES_STATE)
                     def syncWaveByService = buildSyncWaveMap(services)
-                    def plannedServices = []
 
+                    // Resolve commit SHA + framework for all services IN PARALLEL
+                    // (skipped in rollback mode — no repo clone needed)
+                    def resolvedMetadata = [:]
+                    if (!params.ROLLBACK_MODE) {
+                        def parallelClones = [:]
+                        services.eachWithIndex { svc, index ->
+                            def frameworkOverride = svc.framework?.toString()?.trim() ?: ''
+                            def branch = svc.branch?.toString()?.trim() ?: 'main'
+                            def safeProjectName = slugify(svc.name.toString().trim(), 40)
+                            def capturedSvc = svc
+                            def capturedIndex = index
+
+                            parallelClones["resolve-${safeProjectName}"] = {
+                                def metadata = resolveCommitAndFramework(
+                                    capturedSvc,
+                                    branch,
+                                    safeProjectName,
+                                    capturedIndex,
+                                    frameworkOverride
+                                )
+                                synchronized (resolvedMetadata) {
+                                    resolvedMetadata[capturedSvc.name.toString().trim()] = metadata
+                                }
+                            }
+                        }
+                        parallel parallelClones
+                    }
+
+                    def plannedServices = []
                     services.eachWithIndex { svc, index ->
                         def serviceName = svc.name.toString().trim()
                         def safeProjectName = slugify(serviceName, 40)
@@ -165,13 +194,8 @@ pipeline {
                                 commitSha: "rollback-${svc.imageTag.toString().trim()}",
                                 framework: frameworkOverride
                             ]
-                            : resolveCommitAndFramework(
-                                svc,
-                                branch,
-                                safeProjectName,
-                                index,
-                                frameworkOverride
-                            )
+                            : resolvedMetadata[serviceName]
+
                         def commitSha = metadata.commitSha
                         def framework = metadata.framework
                         def imageTag = svc.imageTag?.toString()?.trim()
@@ -222,7 +246,6 @@ pipeline {
             steps {
                 script {
                     def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
-                    def failures = []
                     def changedServiceNames = parseServiceSelection(params.CHANGED_SERVICES)
                     def selectiveBuild = !params.ROLLBACK_MODE && !params.DESTROY_MODE && !changedServiceNames.isEmpty()
 
@@ -230,65 +253,74 @@ pipeline {
                         echo "Selective rebuild enabled for service(s): ${changedServiceNames.join(', ')}"
                     }
 
+                    // Build all services IN PARALLEL — each delegates to its own child job
+                    def parallelBuilds = [:]
+                    def failures = [].asSynchronized()
+
                     services.each { svc ->
                         if (selectiveBuild && !changedServiceNames.contains(svc.name?.toString()?.trim())) {
                             echo "=== Skipping unchanged service: ${svc.name} ==="
                             return
                         }
 
-                        echo "=== Building service: ${svc.name} (type: ${svc.serviceType}) ==="
-                        echo "[service:${svc.name}] Triggering child job '${params.SERVICE_JOB_NAME}'"
+                        def capturedSvc = svc
+                        parallelBuilds["build-${capturedSvc.name}"] = {
+                            echo "=== Building service: ${capturedSvc.name} (type: ${capturedSvc.serviceType}) ==="
+                            echo "[service:${capturedSvc.name}] Triggering child job '${params.SERVICE_JOB_NAME}'"
 
-                        try {
-                            def downstreamBuild = build job: params.SERVICE_JOB_NAME,
-                                wait: true,
-                                propagate: false,
-                                parameters: [
-                                    string(name: 'REPO_URL', value: svc.repoUrl),
-                                    string(name: 'BRANCH', value: svc.branch),
-                                    string(name: 'USER_ID', value: params.USER_ID),
-                                    string(name: 'WORKSPACE_ID', value: env.EFFECTIVE_WORKSPACE_ID),
-                                    string(name: 'PROJECT_NAME', value: svc.name),
-                                    string(name: 'FRAMEWORK', value: svc.framework),
-                                    string(name: 'IMAGE_TAG', value: svc.imageTag),
-                                    string(name: 'REPO_CREDENTIALS_ID', value: svc.repoCredentialsId),
-                                    string(name: 'SONARQUBE_SERVER_NAME', value: params.SONARQUBE_SERVER_NAME),
-                                    string(name: 'SONARQUBE_SCANNER_TOOL', value: params.SONARQUBE_SCANNER_TOOL),
-                                    string(name: 'SONARQUBE_JDK_TOOL_PREFIX', value: params.SONARQUBE_JDK_TOOL_PREFIX),
-                                    booleanParam(name: 'ENABLE_SONARQUBE_SCAN', value: params.ENABLE_SONARQUBE_SCAN),
-                                    booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', value: params.ENABLE_SONARQUBE_QUALITY_GATE),
-                                    booleanParam(name: 'ROLLBACK_MODE', value: params.ROLLBACK_MODE)
-                                ]
+                            try {
+                                def downstreamBuild = build job: params.SERVICE_JOB_NAME,
+                                    wait: true,
+                                    propagate: false,
+                                    parameters: [
+                                        string(name: 'REPO_URL', value: capturedSvc.repoUrl),
+                                        string(name: 'BRANCH', value: capturedSvc.branch),
+                                        string(name: 'USER_ID', value: params.USER_ID),
+                                        string(name: 'WORKSPACE_ID', value: env.EFFECTIVE_WORKSPACE_ID),
+                                        string(name: 'PROJECT_NAME', value: capturedSvc.name),
+                                        string(name: 'FRAMEWORK', value: capturedSvc.framework),
+                                        string(name: 'IMAGE_TAG', value: capturedSvc.imageTag),
+                                        string(name: 'REPO_CREDENTIALS_ID', value: capturedSvc.repoCredentialsId),
+                                        string(name: 'SONARQUBE_SERVER_NAME', value: params.SONARQUBE_SERVER_NAME),
+                                        string(name: 'SONARQUBE_SCANNER_TOOL', value: params.SONARQUBE_SCANNER_TOOL),
+                                        string(name: 'SONARQUBE_JDK_TOOL_PREFIX', value: params.SONARQUBE_JDK_TOOL_PREFIX),
+                                        booleanParam(name: 'ENABLE_SONARQUBE_SCAN', value: params.ENABLE_SONARQUBE_SCAN),
+                                        booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', value: params.ENABLE_SONARQUBE_QUALITY_GATE),
+                                        booleanParam(name: 'ROLLBACK_MODE', value: params.ROLLBACK_MODE)
+                                    ]
 
-                            def childBuildNumber = downstreamBuild?.number?.toString() ?: 'unknown'
-                            def childBuildResult = downstreamBuild?.result?.toString()?.trim() ?: 'UNKNOWN'
-                            def childBuildUrl = downstreamBuild?.absoluteUrl?.toString()?.trim() ?: ''
-                            def childBuildUrlSuffix = childBuildUrl ? " · ${childBuildUrl}" : ''
+                                def childBuildNumber = downstreamBuild?.number?.toString() ?: 'unknown'
+                                def childBuildResult = downstreamBuild?.result?.toString()?.trim() ?: 'UNKNOWN'
+                                def childBuildUrl = downstreamBuild?.absoluteUrl?.toString()?.trim() ?: ''
+                                def childBuildUrlSuffix = childBuildUrl ? " · ${childBuildUrl}" : ''
 
-                            echo "[service:${svc.name}] Child build #${childBuildNumber} finished with result ${childBuildResult}${childBuildUrlSuffix}"
+                                echo "[service:${capturedSvc.name}] Child build #${childBuildNumber} finished with result ${childBuildResult}${childBuildUrlSuffix}"
 
-                            if (childBuildResult != 'SUCCESS') {
+                                if (childBuildResult != 'SUCCESS') {
+                                    failures << [
+                                        name   : capturedSvc.name,
+                                        result : childBuildResult,
+                                        build  : childBuildNumber,
+                                        url    : childBuildUrl
+                                    ]
+                                    echo "=== ${capturedSvc.name}: FAILED (${childBuildResult}) ==="
+                                } else {
+                                    echo "=== ${capturedSvc.name}: built successfully ==="
+                                }
+                            } catch (Exception e) {
+                                echo "=== ${capturedSvc.name}: FAILED — ${e.message} ==="
                                 failures << [
-                                    name   : svc.name,
-                                    result : childBuildResult,
-                                    build  : childBuildNumber,
-                                    url    : childBuildUrl
+                                    name   : capturedSvc.name,
+                                    result : 'ERROR',
+                                    build  : 'unknown',
+                                    url    : '',
+                                    detail : e.message
                                 ]
-                                echo "=== ${svc.name}: FAILED (${childBuildResult}) ==="
-                            } else {
-                                echo "=== ${svc.name}: built successfully ==="
                             }
-                        } catch (Exception e) {
-                            echo "=== ${svc.name}: FAILED — ${e.message} ==="
-                            failures << [
-                                name   : svc.name,
-                                result : 'ERROR',
-                                build  : 'unknown',
-                                url    : '',
-                                detail : e.message
-                            ]
                         }
                     }
+
+                    parallel parallelBuilds
 
                     if (failures) {
                         failures.each { failure ->
@@ -308,15 +340,9 @@ pipeline {
             }
 
             steps {
-                dir('platform-infra') {
-                    checkout([
-                        $class: 'GitSCM',
-                        branches: [[name: '*/main']],
-                        userRemoteConfigs: [[
-                            url: env.INFRA_REPO_URL,
-                            credentialsId: 'infra-repo-creds'
-                        ]]
-                    ])
+                script {
+                    // Restore infra from stash — no re-checkout needed
+                    unstash 'platform-infra-src'
                 }
 
                 script {
@@ -361,14 +387,14 @@ pipeline {
                             esac
 
                             if [ -d "$WORKSPACE/gitops-batch/.git" ]; then
-                            git -C "$WORKSPACE/gitops-batch" remote set-url origin "${AUTHED_GITOPS_REPO_URL}"
-                            git -C "$WORKSPACE/gitops-batch" fetch --depth 1 origin "${GITOPS_BRANCH}" >/dev/null
-                            git -C "$WORKSPACE/gitops-batch" checkout -f "${GITOPS_BRANCH}" >/dev/null
-                            git -C "$WORKSPACE/gitops-batch" reset --hard "origin/${GITOPS_BRANCH}" >/dev/null
-                            git -C "$WORKSPACE/gitops-batch" clean -fd >/dev/null
+                                git -C "$WORKSPACE/gitops-batch" remote set-url origin "${AUTHED_GITOPS_REPO_URL}"
+                                git -C "$WORKSPACE/gitops-batch" fetch --depth 1 origin "${GITOPS_BRANCH}" >/dev/null
+                                git -C "$WORKSPACE/gitops-batch" checkout -f "${GITOPS_BRANCH}" >/dev/null
+                                git -C "$WORKSPACE/gitops-batch" reset --hard "origin/${GITOPS_BRANCH}" >/dev/null
+                                git -C "$WORKSPACE/gitops-batch" clean -fd >/dev/null
                             else
-                            rm -rf "$WORKSPACE/gitops-batch"
-                            git clone --branch "${GITOPS_BRANCH}" --depth 1 "${AUTHED_GITOPS_REPO_URL}" "$WORKSPACE/gitops-batch" >/dev/null
+                                rm -rf "$WORKSPACE/gitops-batch"
+                                git clone --branch "${GITOPS_BRANCH}" --depth 1 "${AUTHED_GITOPS_REPO_URL}" "$WORKSPACE/gitops-batch" >/dev/null
                             fi
 
                             git -C "$WORKSPACE/gitops-batch" config user.email "jenkins@platform.local"
@@ -376,126 +402,123 @@ pipeline {
                             git -C "$WORKSPACE/gitops-batch" remote set-url origin "${AUTHED_GITOPS_REPO_URL}"
                         '''
 
-                    if (params.DESTROY_MODE) {
-                    withEnv([
-                        "DESTROY_APPLICATION_NAME=${slugify("${env.SAFE_STACK_NAME}-${env.SAFE_USER_ID}", 55)}",
-                        "DESTROY_APP_ROOT=apps/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}",
-                        "DESTROY_APPLICATION_FILE=applications/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}.yaml",
-                        "DESTROY_CLEANUP_COMMIT_MESSAGE=${destroyCleanupCommitMessage}"
-                    ]) {
-                        withCredentials([
-                            string(credentialsId: 'argocd-server-url', variable: 'ARGOCD_SERVER'),
-                            usernamePassword(
-                                credentialsId: 'argocd-creds',
-                                usernameVariable: 'ARGOCD_USERNAME',
-                                passwordVariable: 'ARGOCD_PASSWORD'
-                            )
-                        ]) {
-                            sh '''
-                                set -e
+                        if (params.DESTROY_MODE) {
+                            withEnv([
+                                "DESTROY_APPLICATION_NAME=${slugify("${env.SAFE_STACK_NAME}-${env.SAFE_USER_ID}", 55)}",
+                                "DESTROY_APP_ROOT=apps/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}",
+                                "DESTROY_APPLICATION_FILE=applications/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}.yaml",
+                                "DESTROY_CLEANUP_COMMIT_MESSAGE=${destroyCleanupCommitMessage}"
+                            ]) {
+                                withCredentials([
+                                    string(credentialsId: 'argocd-server-url', variable: 'ARGOCD_SERVER'),
+                                    usernamePassword(
+                                        credentialsId: 'argocd-creds',
+                                        usernameVariable: 'ARGOCD_USERNAME',
+                                        passwordVariable: 'ARGOCD_PASSWORD'
+                                    )
+                                ]) {
+                                    sh '''
+                                        set -e
 
-                                echo "==== STEP 1: CLEAN GITOPS FIRST ===="
+                                        echo "==== STEP 1: CLEAN GITOPS FIRST ===="
 
-                                cd "$WORKSPACE/gitops-batch"
+                                        cd "$WORKSPACE/gitops-batch"
 
-                                echo "DESTROY_APP_ROOT=${DESTROY_APP_ROOT}"
-                                echo "DESTROY_APPLICATION_FILE=${DESTROY_APPLICATION_FILE}"
+                                        echo "DESTROY_APP_ROOT=${DESTROY_APP_ROOT}"
+                                        echo "DESTROY_APPLICATION_FILE=${DESTROY_APPLICATION_FILE}"
 
-                                # Debug paths
-                                ls -la "${DESTROY_APP_ROOT}" || echo "App root not found"
-                                ls -la "${DESTROY_APPLICATION_FILE}" || echo "App file not found"
+                                        ls -la "${DESTROY_APP_ROOT}" || echo "App root not found"
+                                        ls -la "${DESTROY_APPLICATION_FILE}" || echo "App file not found"
 
-                                # Remove files
-                                rm -rf "${DESTROY_APP_ROOT}"
-                                rm -f "${DESTROY_APPLICATION_FILE}"
+                                        rm -rf "${DESTROY_APP_ROOT}"
+                                        rm -f "${DESTROY_APPLICATION_FILE}"
 
-                                echo "==== GIT STATUS BEFORE ADD ===="
-                                git status
+                                        echo "==== GIT STATUS BEFORE ADD ===="
+                                        git status
 
-                                # IMPORTANT: use -A
-                                git add -A
+                                        git add -A
 
-                                echo "==== GIT STATUS AFTER ADD ===="
-                                git status
+                                        echo "==== GIT STATUS AFTER ADD ===="
+                                        git status
 
-                                if git diff --cached --quiet; then
-                                    echo "No GitOps cleanup changes required."
-                                else
-                                    git commit -m "${DESTROY_CLEANUP_COMMIT_MESSAGE}" >/dev/null
-                                    git push origin "${GITOPS_BRANCH}" >/dev/null
-                                    echo "GitOps cleanup pushed successfully."
-                                fi
+                                        if git diff --cached --quiet; then
+                                            echo "No GitOps cleanup changes required."
+                                        else
+                                            git commit -m "${DESTROY_CLEANUP_COMMIT_MESSAGE}" >/dev/null
+                                            git push origin "${GITOPS_BRANCH}" >/dev/null
+                                            echo "GitOps cleanup pushed successfully."
+                                        fi
 
-                                echo "Waiting a bit for ArgoCD to sync removal..."
-                                sleep 10
+                                        echo "Waiting a bit for ArgoCD to sync removal..."
+                                        sleep 10
 
-                                echo "==== STEP 2: LOGIN TO ARGOCD ===="
+                                        echo "==== STEP 2: LOGIN TO ARGOCD ===="
 
-                                LOGIN_RESPONSE=$(printf '{"username":"%s","password":"%s"}' \
-                                    "${ARGOCD_USERNAME}" "${ARGOCD_PASSWORD}" | \
-                                    curl -sS --insecure \
-                                        -X POST \
-                                        -H "Content-Type: application/json" \
-                                        -d @- \
-                                        "https://${ARGOCD_SERVER}/api/v1/session")
+                                        LOGIN_RESPONSE=$(printf '{"username":"%s","password":"%s"}' \
+                                            "${ARGOCD_USERNAME}" "${ARGOCD_PASSWORD}" | \
+                                            curl -sS --insecure \
+                                                -X POST \
+                                                -H "Content-Type: application/json" \
+                                                -d @- \
+                                                "https://${ARGOCD_SERVER}/api/v1/session")
 
-                                ARGOCD_AUTH_TOKEN=$(printf '%s' "$LOGIN_RESPONSE" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')
+                                        ARGOCD_AUTH_TOKEN=$(printf '%s' "$LOGIN_RESPONSE" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')
 
-                                if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
-                                    echo "ERROR: ArgoCD login failed. Response: ${LOGIN_RESPONSE}"
-                                    exit 1
-                                fi
+                                        if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
+                                            echo "ERROR: ArgoCD login failed. Response: ${LOGIN_RESPONSE}"
+                                            exit 1
+                                        fi
 
-                                echo "Token obtained successfully."
+                                        echo "Token obtained successfully."
 
-                                echo "==== STEP 3: DELETE ARGOCD APP ===="
+                                        echo "==== STEP 3: DELETE ARGOCD APP ===="
 
-                                DELETE_CODE=$(curl -sS -o /tmp/argocd-delete-response.txt -w "%{http_code}" \
-                                    --insecure \
-                                    -X DELETE \
-                                    -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
-                                    -H "Content-Type: application/json" \
-                                    "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?cascade=true&propagationPolicy=foreground&appNamespace=argocd")
+                                        DELETE_CODE=$(curl -sS -o /tmp/argocd-delete-response.txt -w "%{http_code}" \
+                                            --insecure \
+                                            -X DELETE \
+                                            -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
+                                            -H "Content-Type: application/json" \
+                                            "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?cascade=true&propagationPolicy=foreground&appNamespace=argocd")
 
-                                echo "Delete HTTP code: ${DELETE_CODE}"
-                                cat /tmp/argocd-delete-response.txt || true
-                                rm -f /tmp/argocd-delete-response.txt
+                                        echo "Delete HTTP code: ${DELETE_CODE}"
+                                        cat /tmp/argocd-delete-response.txt || true
+                                        rm -f /tmp/argocd-delete-response.txt
 
-                                if [ "$DELETE_CODE" != "200" ] && [ "$DELETE_CODE" != "202" ] && \
-                                [ "$DELETE_CODE" != "204" ] && [ "$DELETE_CODE" != "404" ]; then
-                                    echo "ERROR: Failed to delete ArgoCD application."
-                                    exit 1
-                                fi
+                                        if [ "$DELETE_CODE" != "200" ] && [ "$DELETE_CODE" != "202" ] && \
+                                        [ "$DELETE_CODE" != "204" ] && [ "$DELETE_CODE" != "404" ]; then
+                                            echo "ERROR: Failed to delete ArgoCD application."
+                                            exit 1
+                                        fi
 
-                                echo "==== STEP 4: WAIT FOR DELETION ===="
+                                        echo "==== STEP 4: WAIT FOR DELETION ===="
 
-                                DEADLINE=$(( $(date +%s) + 300 ))
+                                        DEADLINE=$(( $(date +%s) + 300 ))
 
-                                while true; do
-                                    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-                                        --insecure \
-                                        -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
-                                        "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?appNamespace=argocd")
+                                        while true; do
+                                            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                                                --insecure \
+                                                -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
+                                                "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?appNamespace=argocd")
 
-                                    if [ "$HTTP_CODE" = "404" ] || [ "$HTTP_CODE" = "403" ]; then
-                                        echo "Application confirmed deleted or no longer accessible."
-                                        break
-                                    fi
+                                            if [ "$HTTP_CODE" = "404" ] || [ "$HTTP_CODE" = "403" ]; then
+                                                echo "Application confirmed deleted or no longer accessible."
+                                                break
+                                            fi
 
-                                    if [ $(date +%s) -gt $DEADLINE ]; then
-                                        echo "ERROR: Timed out waiting for ArgoCD deletion."
-                                        exit 1
-                                    fi
+                                            if [ $(date +%s) -gt $DEADLINE ]; then
+                                                echo "ERROR: Timed out waiting for ArgoCD deletion."
+                                                exit 1
+                                            fi
 
-                                    echo "HTTP ${HTTP_CODE} — still deleting, retrying in 10s..."
-                                    sleep 10
-                                done
+                                            echo "HTTP ${HTTP_CODE} — still deleting, retrying in 10s..."
+                                            sleep 10
+                                        done
 
-                                echo "==== DESTROY COMPLETE ===="
-                            '''
-                        }
-                    }
-                }else {
+                                        echo "==== DESTROY COMPLETE ===="
+                                    '''
+                                }
+                            }
+                        } else {
                             withEnv([
                                 "BATCH_OPERATION=${operation}",
                                 "BATCH_PROJECT_NAME=${env.SAFE_STACK_NAME}",
@@ -532,8 +555,8 @@ pipeline {
                                     git add apps applications templates
 
                                     if git diff --cached --quiet; then
-                                    echo "No batched GitOps changes required."
-                                    exit 0
+                                        echo "No batched GitOps changes required."
+                                        exit 0
                                     fi
 
                                     git commit -m "${BATCH_COMMIT_MESSAGE}" >/dev/null
@@ -575,6 +598,8 @@ pipeline {
         }
     }
 }
+
+// ─── Helper functions ────────────────────────────────────────────────────────
 
 def topologicalSort(List services) {
     def nameToSvc = services.collectEntries { [(it.name): it] }

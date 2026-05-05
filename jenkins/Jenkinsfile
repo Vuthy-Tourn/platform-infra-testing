@@ -32,6 +32,8 @@ pipeline {
     environment {
         INFRA_REPO_URL      = credentials('infra-repo-url-micro')
         REGISTRY_REPOSITORY = credentials('register-url-micro')
+        // Enable BuildKit for layer caching
+        DOCKER_BUILDKIT     = '1'
     }
 
     stages {
@@ -93,6 +95,8 @@ pipeline {
                     env.NORMALIZED_REGISTRY_REPOSITORY = normalizedRegistry
                     env.REGISTRY_LOGIN_SERVER = normalizedRegistry.tokenize('/')[0]
                     env.IMAGE_REPOSITORY = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_USER_ID}/${env.SAFE_PROJECT_NAME}"
+                    // Stable "latest" tag used as cache source across builds
+                    env.IMAGE_CACHE_REF = "${env.IMAGE_REPOSITORY}:latest"
                     if (params.IMAGE_TAG?.trim()) {
                         env.IMAGE_TAG = params.IMAGE_TAG.trim()
                     }
@@ -109,8 +113,8 @@ pipeline {
             }
         }
 
-        stage('Checkout infra') { 
-            agent { label 'master' } 
+        stage('Checkout infra') {
+            agent { label 'master' }
             steps {
                 dir('platform-infra') {
                     checkout([
@@ -122,6 +126,8 @@ pipeline {
                         ]]
                     ])
                 }
+                // Stash infra so later stages don't need to re-checkout
+                stash name: 'platform-infra-src', includes: 'platform-infra/**'
             }
         }
 
@@ -164,6 +170,8 @@ pipeline {
                         echo "Resolved image tag: ${env.IMAGE_TAG}"
                     }
                 }
+                // Stash user app so Build Image doesn't need to re-checkout
+                stash name: 'user-app-src', includes: 'user-app/**'
             }
         }
 
@@ -308,38 +316,6 @@ pipeline {
             }
         }
 
-        stage('Prepare Dockerfile') {
-            when {
-                expression { return !params.ROLLBACK_MODE }
-            }
-            agent { label 'master' }
-            steps {
-                dir('user-app') {
-                    sh '''
-                        SCRIPTS_DIR=""
-                        for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
-                            if [ -f "$d/generate-dockerfile.sh" ]; then
-                                SCRIPTS_DIR="$d"
-                                break
-                            fi
-                        done
-                        if [ -z "$SCRIPTS_DIR" ]; then
-                            echo "ERROR: generate-dockerfile.sh not found in expected infra directories."
-                            ls -la "$WORKSPACE" || true
-                            exit 1
-                        fi
-
-                        if [ -f Dockerfile ]; then
-                            echo "Using user-provided Dockerfile."
-                        else
-                            echo "Generating Dockerfile from platform template for ${FRAMEWORK}."
-                            bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
-                        fi
-                    '''
-                }
-            }
-        }
-
         stage('Build Image') {
             when {
                 expression { return !params.ROLLBACK_MODE }
@@ -347,35 +323,11 @@ pipeline {
             agent { label 'master' }
             steps {
                 script {
-                    // Re-checkout infra (for scripts + helm chart)
-                    dir('platform-infra') {
-                        checkout([
-                            $class: 'GitSCM',
-                            branches: [[name: '*/main']],
-                            userRemoteConfigs: [[
-                                url: env.INFRA_REPO_URL,
-                                credentialsId: 'infra-repo-creds'
-                            ]]
-                        ])
-                    }
+                    // Restore from stash — no re-checkout needed
+                    unstash 'platform-infra-src'
+                    unstash 'user-app-src'
 
-                    // Re-checkout user app
-                    dir('user-app') {
-                        if (params.REPO_CREDENTIALS_ID?.trim()) {
-                            checkout([
-                                $class: 'GitSCM',
-                                branches: [[name: "*/${params.BRANCH}"]],
-                                userRemoteConfigs: [[
-                                    url: env.NORMALIZED_REPO_URL,
-                                    credentialsId: params.REPO_CREDENTIALS_ID
-                                ]]
-                            ])
-                        } else {
-                            git url: env.NORMALIZED_REPO_URL, branch: params.BRANCH
-                        }
-                    }
-
-                    // Prepare Dockerfile (in case user didn't provide one)
+                    // Generate Dockerfile if the user didn't provide one
                     dir('user-app') {
                         sh '''
                             SCRIPTS_DIR=""
@@ -406,20 +358,27 @@ pipeline {
                         passwordVariable: 'REGISTRY_PASSWORD'
                     )]) {
                         sh '''
-                            echo "[auth] Logging in to ${REGISTRY_LOGIN_SERVER} before build"
+                            echo "[auth] Logging in to ${REGISTRY_LOGIN_SERVER}"
                             echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
                                 -u "${REGISTRY_USERNAME}" --password-stdin
+
+                            echo "[cache] Pulling cache image ${IMAGE_CACHE_REF} (failure is non-fatal)"
+                            docker pull "${IMAGE_CACHE_REF}" || true
                         '''
                     }
 
-                    // Build
                     dir('user-app') {
-                        withEnv(["FULL_IMAGE=${env.IMAGE_FULL}"]) {
-                            echo "[build] Starting shared-library docker build for ${env.IMAGE_FULL}"
-                            buildDocker()
-                        }
+                        // Build with --cache-from so unchanged layers are reused
                         sh '''
+                            echo "[build] Starting Docker build for ${IMAGE_FULL}"
+                            docker build \
+                                --cache-from "${IMAGE_CACHE_REF}" \
+                                --build-arg BUILDKIT_INLINE_CACHE=1 \
+                                -t "${IMAGE_FULL}" \
+                                -t "${IMAGE_CACHE_REF}" \
+                                .
                             echo "[build] Docker build completed"
+
                             echo "[build] Exporting image bundle for ${IMAGE_FULL}"
                             docker save "${IMAGE_FULL}" -o image.tar
                         '''
@@ -436,7 +395,7 @@ pipeline {
             }
             agent { label 'trivy' }
             steps {
-                deleteDir()
+                // Removed deleteDir() — keeping workspace preserves Docker layer cache on this node
                 unstash 'built-image-tar'
                 withCredentials([usernamePassword(
                     credentialsId: 'registry-credentials',
@@ -486,8 +445,12 @@ pipeline {
                     }
 
                     sh '''
-                        echo "[push] Pushing image ${IMAGE_FULL}"
+                        echo "[push] Pushing versioned image ${IMAGE_FULL}"
                         docker push "${IMAGE_FULL}"
+
+                        echo "[push] Pushing cache tag ${IMAGE_CACHE_REF}"
+                        docker push "${IMAGE_CACHE_REF}"
+
                         echo "[push] Image push completed"
                     '''
                 }
