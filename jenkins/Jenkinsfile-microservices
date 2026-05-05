@@ -477,8 +477,8 @@ pipeline {
                                         -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
                                         "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?appNamespace=argocd")
 
-                                    if [ "$HTTP_CODE" = "404" ]; then
-                                        echo "Application confirmed deleted."
+                                    if [ "$HTTP_CODE" = "404" ] || [ "$HTTP_CODE" = "403" ]; then
+                                        echo "Application confirmed deleted or no longer accessible."
                                         break
                                     fi
 
