@@ -427,6 +427,9 @@ pipeline {
                         echo "[scan] Loading built image bundle on the Trivy node"
                         docker load -i user-app/image.tar
 
+                        echo "[scan] Re-tagging loaded image for cache push"
+                        docker tag "${IMAGE_FULL}" "${IMAGE_CACHE_REF}"
+
                         echo "[scan] Logging in to ${REGISTRY_LOGIN_SERVER} on the Trivy node"
                         echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
                             -u "${REGISTRY_USERNAME}" --password-stdin
