@@ -372,16 +372,19 @@ pipeline {
                         // prevents stale/wrong layers from poisoning the build.
                         sh '''
                             CACHE_FROM_ARG=""
+                            CACHE_POLICY_ARG="--no-cache"
                             echo "[cache] Attempting to pull cache image ${IMAGE_CACHE_REF}"
                             if docker pull "${IMAGE_CACHE_REF}" > /dev/null 2>&1; then
                                 CACHE_FROM_ARG="--cache-from ${IMAGE_CACHE_REF}"
+                                CACHE_POLICY_ARG=""
                                 echo "[cache] Cache image pulled — layers will be reused"
                             else
-                                echo "[cache] No cache image found — building from scratch"
+                                echo "[cache] No cache image found — forcing a clean build to avoid stale local layers"
                             fi
 
                             echo "[build] Starting Docker build for ${IMAGE_FULL}"
                             docker build \
+                                ${CACHE_POLICY_ARG} \
                                 ${CACHE_FROM_ARG} \
                                 --build-arg BUILDKIT_INLINE_CACHE=1 \
                                 -t "${IMAGE_FULL}" \
