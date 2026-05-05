@@ -420,7 +420,7 @@ pipeline {
                                     -X DELETE \
                                     -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
                                     -H "Content-Type: application/json" \
-                                    "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?cascade=true&propagationPolicy=foreground")
+                                    "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?cascade=true&propagationPolicy=foreground&appNamespace=argocd")
 
                                     echo "Delete HTTP code: ${DELETE_CODE}"
                                     cat /tmp/argocd-delete-response.txt || true
@@ -439,7 +439,7 @@ pipeline {
                                         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
                                             --insecure \
                                             -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
-                                            "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}")
+                                            "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?appNamespace=argocd")
 
                                         if [ "$HTTP_CODE" = "404" ]; then
                                             echo "Application confirmed deleted."
