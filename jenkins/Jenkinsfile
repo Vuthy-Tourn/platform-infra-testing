@@ -361,18 +361,27 @@ pipeline {
                             echo "[auth] Logging in to ${REGISTRY_LOGIN_SERVER}"
                             echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
                                 -u "${REGISTRY_USERNAME}" --password-stdin
-
-                            echo "[cache] Pulling cache image ${IMAGE_CACHE_REF} (failure is non-fatal)"
-                            docker pull "${IMAGE_CACHE_REF}" || true
                         '''
                     }
 
                     dir('user-app') {
-                        // Build with --cache-from so unchanged layers are reused
+                        // Only pass --cache-from if this service's own :latest pulled successfully.
+                        // If the pull fails (first build, prior build failed before push, or a
+                        // different service's image is tagged :latest) we build from scratch —
+                        // prevents stale/wrong layers from poisoning the build.
                         sh '''
+                            CACHE_FROM_ARG=""
+                            echo "[cache] Attempting to pull cache image ${IMAGE_CACHE_REF}"
+                            if docker pull "${IMAGE_CACHE_REF}" > /dev/null 2>&1; then
+                                CACHE_FROM_ARG="--cache-from ${IMAGE_CACHE_REF}"
+                                echo "[cache] Cache image pulled — layers will be reused"
+                            else
+                                echo "[cache] No cache image found — building from scratch"
+                            fi
+
                             echo "[build] Starting Docker build for ${IMAGE_FULL}"
                             docker build \
-                                --cache-from "${IMAGE_CACHE_REF}" \
+                                ${CACHE_FROM_ARG} \
                                 --build-arg BUILDKIT_INLINE_CACHE=1 \
                                 -t "${IMAGE_FULL}" \
                                 -t "${IMAGE_CACHE_REF}" \
@@ -395,7 +404,6 @@ pipeline {
             }
             agent { label 'trivy' }
             steps {
-                // Removed deleteDir() — keeping workspace preserves Docker layer cache on this node
                 unstash 'built-image-tar'
                 withCredentials([usernamePassword(
                     credentialsId: 'registry-credentials',
