@@ -381,6 +381,7 @@ pipeline {
 
                             echo "[build] Starting Docker build for ${IMAGE_FULL}"
                             docker build \
+                                 --no-cache \
                                 ${CACHE_FROM_ARG} \
                                 --build-arg BUILDKIT_INLINE_CACHE=1 \
                                 -t "${IMAGE_FULL}" \
