@@ -138,6 +138,7 @@ pipeline {
             agent { label 'master' }
             steps {
                 dir('user-app') {
+                    deleteDir()
                     script {
                         env.NORMALIZED_REPO_URL = params.REPO_URL
                         if (params.REPO_URL?.contains('%')) {
@@ -381,7 +382,6 @@ pipeline {
 
                             echo "[build] Starting Docker build for ${IMAGE_FULL}"
                             docker build \
-                                 --no-cache \
                                 ${CACHE_FROM_ARG} \
                                 --build-arg BUILDKIT_INLINE_CACHE=1 \
                                 -t "${IMAGE_FULL}" \
