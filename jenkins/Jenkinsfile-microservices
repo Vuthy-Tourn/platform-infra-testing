@@ -30,6 +30,7 @@ pipeline {
         booleanParam(name: 'ENABLE_SONARQUBE_SCAN', defaultValue: false, description: 'Run SonarQube source analysis for each changed service')
         booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', defaultValue: false, description: 'Wait for SonarQube quality gate before continuing each service build')
         booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Rollback all services to saved image tags')
+        booleanParam(name: 'GITOPS_ONLY_UPDATE', defaultValue: false, description: 'Skip service builds and update GitOps only using the provided image tags')
         booleanParam(name: 'DESTROY_MODE', defaultValue: false, description: 'Remove this microservice project from GitOps and tear down its runtime resources')
         string(name: 'SERVICES_JSON', defaultValue: '[]', description: 'JSON array of service descriptors')
         string(name: 'CHANGED_SERVICES', defaultValue: '', description: 'Optional comma-separated service names to rebuild during webhook-triggered updates')
@@ -67,14 +68,14 @@ pipeline {
                         if (!svc.name?.toString()?.trim()) {
                             error("Service entry missing 'name': ${svc}")
                         }
-                        if (!params.ROLLBACK_MODE && !params.DESTROY_MODE && !svc.repoUrl?.toString()?.trim()) {
+                        if (!params.ROLLBACK_MODE && !params.DESTROY_MODE && !params.GITOPS_ONLY_UPDATE && !svc.repoUrl?.toString()?.trim()) {
                             error("Service '${svc.name}' missing 'repoUrl'")
                         }
-                        if (params.ROLLBACK_MODE && !params.DESTROY_MODE && !svc.imageTag?.toString()?.trim()) {
-                            error("Service '${svc.name}' missing 'imageTag' for rollback")
+                        if ((params.ROLLBACK_MODE || params.GITOPS_ONLY_UPDATE) && !params.DESTROY_MODE && !svc.imageTag?.toString()?.trim()) {
+                            error("Service '${svc.name}' missing 'imageTag' for rollback/GitOps-only update")
                         }
-                        if (params.ROLLBACK_MODE && !params.DESTROY_MODE && !svc.framework?.toString()?.trim()) {
-                            error("Service '${svc.name}' missing 'framework' for rollback")
+                        if ((params.ROLLBACK_MODE || params.GITOPS_ONLY_UPDATE) && !params.DESTROY_MODE && !svc.framework?.toString()?.trim()) {
+                            error("Service '${svc.name}' missing 'framework' for rollback/GitOps-only update")
                         }
                     }
 
@@ -153,7 +154,7 @@ pipeline {
                     // (skipped in rollback mode — no repo clone needed)
                     // Each branch writes to its own key — no shared-state conflict, no synchronized needed.
                     def resolvedMetadata = [:]
-                    if (!params.ROLLBACK_MODE) {
+                    if (!params.ROLLBACK_MODE && !params.GITOPS_ONLY_UPDATE) {
                         def parallelClones = [:]
                         services.eachWithIndex { svc, index ->
                             def frameworkOverride = svc.framework?.toString()?.trim() ?: ''
@@ -190,9 +191,11 @@ pipeline {
 
                         def branch = svc.branch?.toString()?.trim() ?: 'main'
                         def frameworkOverride = svc.framework?.toString()?.trim() ?: ''
-                        def metadata = params.ROLLBACK_MODE
+                        def metadata = (params.ROLLBACK_MODE || params.GITOPS_ONLY_UPDATE)
                             ? [
-                                commitSha: "rollback-${svc.imageTag.toString().trim()}",
+                                commitSha: params.ROLLBACK_MODE
+                                    ? "rollback-${svc.imageTag.toString().trim()}"
+                                    : "gitops-${svc.imageTag.toString().trim()}",
                                 framework: frameworkOverride
                             ]
                             : resolvedMetadata[serviceName]
@@ -242,7 +245,7 @@ pipeline {
 
         stage('Build and push services') {
             when {
-                expression { return !params.DESTROY_MODE && !params.ROLLBACK_MODE }
+                expression { return !params.DESTROY_MODE && !params.ROLLBACK_MODE && !params.GITOPS_ONLY_UPDATE }
             }
             steps {
                 script {
@@ -338,7 +341,7 @@ pipeline {
 
         stage('Update GitOps repository (batched)') {
             when {
-                expression { return params.ENABLE_GITOPS_UPDATE || params.DESTROY_MODE || params.ROLLBACK_MODE }
+                expression { return params.ENABLE_GITOPS_UPDATE || params.DESTROY_MODE || params.ROLLBACK_MODE || params.GITOPS_ONLY_UPDATE }
             }
 
             steps {
@@ -358,6 +361,8 @@ pipeline {
 
                     if (params.ROLLBACK_MODE) {
                         echo "Rollback mode: skipping child build jobs and updating GitOps to saved image tags only."
+                    } else if (params.GITOPS_ONLY_UPDATE) {
+                        echo "GitOps-only update mode: skipping child build jobs and updating manifests only."
                     }
 
                     def workspaceCommitMessage =
