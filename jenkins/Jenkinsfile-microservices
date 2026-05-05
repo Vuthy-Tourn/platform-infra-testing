@@ -404,18 +404,7 @@ pipeline {
                                             -d @- \
                                             "https://${ARGOCD_SERVER}/api/v1/session")
 
-                                    ARGOCD_AUTH_TOKEN=$(printf '%s' "$LOGIN_RESPONSE" | python3 -c '
-                                import sys, json
-                                raw = sys.stdin.read().strip()
-                                if not raw:
-                                    print("")
-                                    sys.exit(0)
-                                try:
-                                    d = json.loads(raw)
-                                    print(d.get("token", ""))
-                                except Exception:
-                                    print("")
-                                ')
+                                    ARGOCD_AUTH_TOKEN=$(printf '%s' "$LOGIN_RESPONSE" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')
 
                                     if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
                                         echo "ERROR: ArgoCD login failed. Response: ${LOGIN_RESPONSE}"
