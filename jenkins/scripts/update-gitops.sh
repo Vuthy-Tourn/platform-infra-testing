@@ -15,7 +15,7 @@ Usage: update-gitops.sh \
   --chart-path <path> \
   --ssh-key <path> \
   --skip-push <true|false> \
-  --operation <deploy|rollback|destroy> \
+  --operation <deploy|rollback|config-update|destroy> \
   --workspace-id <workspace-id> \
   --user-id <user-id> \
   --project-name <stack-name> \

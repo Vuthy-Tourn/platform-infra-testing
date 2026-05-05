@@ -357,7 +357,7 @@ pipeline {
 
                     def operation = params.DESTROY_MODE
                         ? 'destroy'
-                        : (params.ROLLBACK_MODE ? 'rollback' : 'deploy')
+                        : (params.ROLLBACK_MODE ? 'rollback' : (params.GITOPS_ONLY_UPDATE ? 'config-update' : 'deploy'))
 
                     if (params.ROLLBACK_MODE) {
                         echo "Rollback mode: skipping child build jobs and updating GitOps to saved image tags only."
