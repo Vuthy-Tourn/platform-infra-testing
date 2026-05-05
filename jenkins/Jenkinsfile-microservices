@@ -416,10 +416,11 @@ pipeline {
                                     echo "Deleting ArgoCD application: ${DESTROY_APPLICATION_NAME}"
 
                                     DELETE_CODE=$(curl -sS -o /tmp/argocd-delete-response.txt -w "%{http_code}" \
-                                        --insecure \
-                                        -X DELETE \
-                                        -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
-                                        "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?cascade=true")
+                                    --insecure \
+                                    -X DELETE \
+                                    -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
+                                    -H "Content-Type: application/json" \
+                                    "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?cascade=true&propagationPolicy=foreground")
 
                                     echo "Delete HTTP code: ${DELETE_CODE}"
                                     cat /tmp/argocd-delete-response.txt || true
