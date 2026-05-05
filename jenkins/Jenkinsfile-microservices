@@ -151,6 +151,7 @@ pipeline {
 
                     // Resolve commit SHA + framework for all services IN PARALLEL
                     // (skipped in rollback mode — no repo clone needed)
+                    // Each branch writes to its own key — no shared-state conflict, no synchronized needed.
                     def resolvedMetadata = [:]
                     if (!params.ROLLBACK_MODE) {
                         def parallelClones = [:]
@@ -160,6 +161,7 @@ pipeline {
                             def safeProjectName = slugify(svc.name.toString().trim(), 40)
                             def capturedSvc = svc
                             def capturedIndex = index
+                            def capturedName = svc.name.toString().trim()
 
                             parallelClones["resolve-${safeProjectName}"] = {
                                 def metadata = resolveCommitAndFramework(
@@ -169,9 +171,8 @@ pipeline {
                                     capturedIndex,
                                     frameworkOverride
                                 )
-                                synchronized (resolvedMetadata) {
-                                    resolvedMetadata[capturedSvc.name.toString().trim()] = metadata
-                                }
+                                // Each branch writes to a unique key — safe without synchronized
+                                resolvedMetadata[capturedName] = metadata
                             }
                         }
                         parallel parallelClones
@@ -255,7 +256,8 @@ pipeline {
 
                     // Build all services IN PARALLEL — each delegates to its own child job
                     def parallelBuilds = [:]
-                    def failures = [].asSynchronized()
+                    // Plain list is safe — Jenkins CPS parallel is cooperative, not truly concurrent
+                    def failures = []
 
                     services.each { svc ->
                         if (selectiveBuild && !changedServiceNames.contains(svc.name?.toString()?.trim())) {
