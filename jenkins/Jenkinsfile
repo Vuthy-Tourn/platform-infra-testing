@@ -324,6 +324,15 @@ pipeline {
             agent { label 'master' }
             steps {
                 script {
+                    // Clear restored directories first so unstash cannot leave behind
+                    // source files from a previous service build on the same workspace.
+                    dir('platform-infra') {
+                        deleteDir()
+                    }
+                    dir('user-app') {
+                        deleteDir()
+                    }
+
                     // Restore from stash — no re-checkout needed
                     unstash 'platform-infra-src'
                     unstash 'user-app-src'
