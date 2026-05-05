@@ -376,104 +376,126 @@ pipeline {
                             git -C "$WORKSPACE/gitops-batch" remote set-url origin "${AUTHED_GITOPS_REPO_URL}"
                         '''
 
-                     if (params.DESTROY_MODE) {
-                        withEnv([
-                            "DESTROY_APPLICATION_NAME=${slugify("${env.SAFE_STACK_NAME}-${env.SAFE_USER_ID}", 55)}",
-                            "DESTROY_APP_ROOT=apps/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}",
-                            "DESTROY_APPLICATION_FILE=applications/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}.yaml",
-                            "DESTROY_CLEANUP_COMMIT_MESSAGE=${destroyCleanupCommitMessage}"
+                    if (params.DESTROY_MODE) {
+                    withEnv([
+                        "DESTROY_APPLICATION_NAME=${slugify("${env.SAFE_STACK_NAME}-${env.SAFE_USER_ID}", 55)}",
+                        "DESTROY_APP_ROOT=apps/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}",
+                        "DESTROY_APPLICATION_FILE=applications/${env.SAFE_WORKSPACE_ID}/${env.SAFE_USER_ID}/${env.SAFE_STACK_NAME}.yaml",
+                        "DESTROY_CLEANUP_COMMIT_MESSAGE=${destroyCleanupCommitMessage}"
+                    ]) {
+                        withCredentials([
+                            string(credentialsId: 'argocd-server-url', variable: 'ARGOCD_SERVER'),
+                            usernamePassword(
+                                credentialsId: 'argocd-creds',
+                                usernameVariable: 'ARGOCD_USERNAME',
+                                passwordVariable: 'ARGOCD_PASSWORD'
+                            )
                         ]) {
-                            withCredentials([
-                                string(credentialsId: 'argocd-server-url', variable: 'ARGOCD_SERVER'),
-                                usernamePassword(
-                                    credentialsId: 'argocd-creds',
-                                    usernameVariable: 'ARGOCD_USERNAME',
-                                    passwordVariable: 'ARGOCD_PASSWORD'
-                                )
-                            ]) {
-                                sh '''
-                                    set -e
+                            sh '''
+                                set -e
 
-                                    echo "Logging in to ArgoCD at: ${ARGOCD_SERVER}"
+                                echo "==== STEP 1: CLEAN GITOPS FIRST ===="
 
-                                    LOGIN_RESPONSE=$(printf '{"username":"%s","password":"%s"}' \
-                                        "${ARGOCD_USERNAME}" "${ARGOCD_PASSWORD}" | \
-                                        curl -sS --insecure \
-                                            -X POST \
-                                            -H "Content-Type: application/json" \
-                                            -d @- \
-                                            "https://${ARGOCD_SERVER}/api/v1/session")
+                                cd "$WORKSPACE/gitops-batch"
 
-                                    ARGOCD_AUTH_TOKEN=$(printf '%s' "$LOGIN_RESPONSE" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')
+                                echo "DESTROY_APP_ROOT=${DESTROY_APP_ROOT}"
+                                echo "DESTROY_APPLICATION_FILE=${DESTROY_APPLICATION_FILE}"
 
-                                    if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
-                                        echo "ERROR: ArgoCD login failed. Response: ${LOGIN_RESPONSE}"
-                                        exit 1
-                                    fi
+                                # Debug paths
+                                ls -la "${DESTROY_APP_ROOT}" || echo "App root not found"
+                                ls -la "${DESTROY_APPLICATION_FILE}" || echo "App file not found"
 
-                                    echo "Token obtained successfully."
+                                # Remove files
+                                rm -rf "${DESTROY_APP_ROOT}"
+                                rm -f "${DESTROY_APPLICATION_FILE}"
 
-                                    echo "Deleting ArgoCD application: ${DESTROY_APPLICATION_NAME}"
+                                echo "==== GIT STATUS BEFORE ADD ===="
+                                git status
 
-                                    DELETE_CODE=$(curl -sS -o /tmp/argocd-delete-response.txt -w "%{http_code}" \
+                                # IMPORTANT: use -A
+                                git add -A
+
+                                echo "==== GIT STATUS AFTER ADD ===="
+                                git status
+
+                                if git diff --cached --quiet; then
+                                    echo "No GitOps cleanup changes required."
+                                else
+                                    git commit -m "${DESTROY_CLEANUP_COMMIT_MESSAGE}" >/dev/null
+                                    git push origin "${GITOPS_BRANCH}" >/dev/null
+                                    echo "GitOps cleanup pushed successfully."
+                                fi
+
+                                echo "Waiting a bit for ArgoCD to sync removal..."
+                                sleep 10
+
+                                echo "==== STEP 2: LOGIN TO ARGOCD ===="
+
+                                LOGIN_RESPONSE=$(printf '{"username":"%s","password":"%s"}' \
+                                    "${ARGOCD_USERNAME}" "${ARGOCD_PASSWORD}" | \
+                                    curl -sS --insecure \
+                                        -X POST \
+                                        -H "Content-Type: application/json" \
+                                        -d @- \
+                                        "https://${ARGOCD_SERVER}/api/v1/session")
+
+                                ARGOCD_AUTH_TOKEN=$(printf '%s' "$LOGIN_RESPONSE" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')
+
+                                if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
+                                    echo "ERROR: ArgoCD login failed. Response: ${LOGIN_RESPONSE}"
+                                    exit 1
+                                fi
+
+                                echo "Token obtained successfully."
+
+                                echo "==== STEP 3: DELETE ARGOCD APP ===="
+
+                                DELETE_CODE=$(curl -sS -o /tmp/argocd-delete-response.txt -w "%{http_code}" \
                                     --insecure \
                                     -X DELETE \
                                     -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
                                     -H "Content-Type: application/json" \
                                     "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?cascade=true&propagationPolicy=foreground&appNamespace=argocd")
 
-                                    echo "Delete HTTP code: ${DELETE_CODE}"
-                                    cat /tmp/argocd-delete-response.txt || true
-                                    rm -f /tmp/argocd-delete-response.txt
+                                echo "Delete HTTP code: ${DELETE_CODE}"
+                                cat /tmp/argocd-delete-response.txt || true
+                                rm -f /tmp/argocd-delete-response.txt
 
-                                    if [ "$DELETE_CODE" != "200" ] && [ "$DELETE_CODE" != "202" ] && \
-                                    [ "$DELETE_CODE" != "204" ] && [ "$DELETE_CODE" != "404" ]; then
-                                        echo "ERROR: Failed to delete ArgoCD application."
+                                if [ "$DELETE_CODE" != "200" ] && [ "$DELETE_CODE" != "202" ] && \
+                                [ "$DELETE_CODE" != "204" ] && [ "$DELETE_CODE" != "404" ]; then
+                                    echo "ERROR: Failed to delete ArgoCD application."
+                                    exit 1
+                                fi
+
+                                echo "==== STEP 4: WAIT FOR DELETION ===="
+
+                                DEADLINE=$(( $(date +%s) + 300 ))
+
+                                while true; do
+                                    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                                        --insecure \
+                                        -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
+                                        "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?appNamespace=argocd")
+
+                                    if [ "$HTTP_CODE" = "404" ]; then
+                                        echo "Application confirmed deleted."
+                                        break
+                                    fi
+
+                                    if [ $(date +%s) -gt $DEADLINE ]; then
+                                        echo "ERROR: Timed out waiting for ArgoCD deletion."
                                         exit 1
                                     fi
 
-                                    echo "Waiting for ArgoCD to confirm deletion..."
-                                    DEADLINE=$(( $(date +%s) + 300 ))
+                                    echo "HTTP ${HTTP_CODE} — still deleting, retrying in 10s..."
+                                    sleep 10
+                                done
 
-                                    while true; do
-                                        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-                                            --insecure \
-                                            -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
-                                            "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?appNamespace=argocd")
-
-                                        if [ "$HTTP_CODE" = "404" ]; then
-                                            echo "Application confirmed deleted."
-                                            break
-                                        fi
-
-                                        if [ $(date +%s) -gt $DEADLINE ]; then
-                                            echo "ERROR: Timed out waiting for ArgoCD deletion."
-                                            exit 1
-                                        fi
-
-                                        echo "HTTP ${HTTP_CODE} — still deleting, retrying in 10s..."
-                                        sleep 10
-                                    done
-
-                                    echo "Now cleaning GitOps repo..."
-
-                                    cd "$WORKSPACE/gitops-batch"
-                                    rm -rf "${DESTROY_APP_ROOT}"
-                                    rm -f "${DESTROY_APPLICATION_FILE}"
-
-                                    git add apps applications templates || true
-
-                                    if git diff --cached --quiet; then
-                                        echo "No GitOps cleanup changes required."
-                                    else
-                                        git commit -m "${DESTROY_CLEANUP_COMMIT_MESSAGE}" >/dev/null
-                                        git push origin "${GITOPS_BRANCH}" >/dev/null
-                                        echo "GitOps cleanup pushed successfully."
-                                    fi
-                                '''
-                            }
+                                echo "==== DESTROY COMPLETE ===="
+                            '''
                         }
-                    } else {
+                    }
+                }else {
                             withEnv([
                                 "BATCH_OPERATION=${operation}",
                                 "BATCH_PROJECT_NAME=${env.SAFE_STACK_NAME}",
