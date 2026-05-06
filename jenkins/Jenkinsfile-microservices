@@ -196,12 +196,14 @@ pipeline {
                                 commitSha: params.ROLLBACK_MODE
                                     ? "rollback-${svc.imageTag.toString().trim()}"
                                     : "gitops-${svc.imageTag.toString().trim()}",
-                                framework: frameworkOverride
+                                framework: frameworkOverride,
+                                branch   : branch
                             ]
                             : resolvedMetadata[serviceName]
 
                         def commitSha = metadata.commitSha
                         def framework = metadata.framework
+                        def resolvedBranch = metadata.branch ?: branch
                         def imageTag = svc.imageTag?.toString()?.trim()
                             ? svc.imageTag.toString().trim()
                             : "${env.BUILD_NUMBER}-${commitSha}"
@@ -215,7 +217,7 @@ pipeline {
                         plannedServices << [
                             name               : serviceName,
                             repoUrl            : svc.repoUrl?.toString()?.trim() ?: '',
-                            branch             : branch,
+                            branch             : resolvedBranch,
                             repoCredentialsId  : svc.repoCredentialsId?.toString()?.trim() ?: '',
                             framework          : framework,
                             appPort            : svc.appPort?.toString()?.trim() ?: '8080',
@@ -1152,20 +1154,14 @@ def resolveCommitAndFramework(def svc, String branch, String safeProjectName, in
 
     def resolvedCommitSha = ''
     def resolvedFramework = frameworkOverride
+    def resolvedBranch = branch
 
     dir("service-plan/${index}-${safeProjectName}") {
-        if (svc.repoCredentialsId?.toString()?.trim()) {
-            checkout([
-                $class: 'GitSCM',
-                branches: [[name: "*/${branch}"]],
-                userRemoteConfigs: [[
-                    url: resolvedRepoUrl,
-                    credentialsId: svc.repoCredentialsId.toString().trim()
-                ]]
-            ])
-        } else {
-            git url: resolvedRepoUrl, branch: branch
-        }
+        resolvedBranch = checkoutRepoWithBranchFallback(
+            resolvedRepoUrl,
+            svc.repoCredentialsId?.toString()?.trim() ?: '',
+            branch
+        )
 
         sh '''
             if [ -d .git ]; then
@@ -1189,6 +1185,51 @@ def resolveCommitAndFramework(def svc, String branch, String safeProjectName, in
 
     [
         commitSha: resolvedCommitSha,
-        framework: resolvedFramework
+        framework: resolvedFramework,
+        branch   : resolvedBranch
     ]
+}
+
+def buildRepoBranchCandidates(String requestedBranch) {
+    def normalizedBranch = requestedBranch?.toString()?.trim()
+    if (!normalizedBranch) {
+        return ['main', 'master']
+    }
+
+    def candidates = [normalizedBranch]
+    if (normalizedBranch == 'main') {
+        candidates << 'master'
+    } else if (normalizedBranch == 'master') {
+        candidates << 'main'
+    }
+    return candidates.unique()
+}
+
+def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String requestedBranch) {
+    def candidates = buildRepoBranchCandidates(requestedBranch)
+    def lastError = null
+
+    for (String candidate : candidates) {
+        try {
+            deleteDir()
+            if (credentialsId?.trim()) {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "*/${candidate}"]],
+                    userRemoteConfigs: [[
+                        url: repoUrl,
+                        credentialsId: credentialsId.trim()
+                    ]]
+                ])
+            } else {
+                git url: repoUrl, branch: candidate
+            }
+            return candidate
+        } catch (Exception err) {
+            lastError = err
+            echo "Checkout failed for branch '${candidate}' from ${repoUrl}: ${err.getMessage()}"
+        }
+    }
+
+    throw lastError ?: new RuntimeException("Could not checkout ${repoUrl} from any candidate branch: ${candidates.join(', ')}")
 }

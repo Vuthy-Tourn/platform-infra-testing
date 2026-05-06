@@ -25,11 +25,20 @@ Create two pipeline jobs from SCM:
 
 1. `deploy-service-test`
    Script path: `jenkins/Jenkinsfile`
+   Branch specifier: `*/main`
 
 2. `deploy-microservices-test`
    Script path: `jenkins/Jenkinsfile-microservices`
+   Branch specifier: `*/main`
 
 This test copy is wired so the orchestrator defaults to calling `deploy-service-test`.
+
+Important checkout note:
+
+- If the Jenkins log shows `refs/remotes/origin/master` or `Could not checkout master`, the job is still configured to read this repo from `master`.
+- Update the Jenkins job SCM branch specifier to `*/main`.
+- After switching the branch specifier, wipe the job workspace once before re-running.
+- This checkout happens before the pipeline script runs, so it cannot be corrected by editing the Jenkinsfile alone.
 
 ## Recommended first test order
 

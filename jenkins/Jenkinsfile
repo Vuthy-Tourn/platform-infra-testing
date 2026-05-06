@@ -149,18 +149,11 @@ pipeline {
                             }
                         }
 
-                        if (params.REPO_CREDENTIALS_ID?.trim()) {
-                            checkout([
-                                $class: 'GitSCM',
-                                branches: [[name: "*/${params.BRANCH}"]],
-                                userRemoteConfigs: [[
-                                    url: env.NORMALIZED_REPO_URL,
-                                    credentialsId: params.REPO_CREDENTIALS_ID
-                                ]]
-                            ])
-                        } else {
-                            git url: env.NORMALIZED_REPO_URL, branch: params.BRANCH
-                        }
+                        env.RESOLVED_APP_BRANCH = checkoutRepoWithBranchFallback(
+                            env.NORMALIZED_REPO_URL,
+                            params.REPO_CREDENTIALS_ID?.trim() ?: '',
+                            params.BRANCH?.trim() ?: 'main'
+                        )
 
                         env.APP_COMMIT_SHA = sh(script: 'git rev-parse --short=12 HEAD', returnStdout: true).trim()
                         if (!env.IMAGE_TAG?.trim()) {
@@ -168,6 +161,7 @@ pipeline {
                         }
                         env.IMAGE_FULL = "${env.IMAGE_REPOSITORY}:${env.IMAGE_TAG}"
 
+                        echo "Resolved application branch: ${env.RESOLVED_APP_BRANCH}"
                         echo "Resolved image tag: ${env.IMAGE_TAG}"
                     }
                 }
@@ -506,4 +500,48 @@ pipeline {
             }
         }
     }
+}
+
+def buildRepoBranchCandidates(String requestedBranch) {
+    def normalizedBranch = requestedBranch?.toString()?.trim()
+    if (!normalizedBranch) {
+        return ['main', 'master']
+    }
+
+    def candidates = [normalizedBranch]
+    if (normalizedBranch == 'main') {
+        candidates << 'master'
+    } else if (normalizedBranch == 'master') {
+        candidates << 'main'
+    }
+    return candidates.unique()
+}
+
+def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String requestedBranch) {
+    def candidates = buildRepoBranchCandidates(requestedBranch)
+    def lastError = null
+
+    for (String candidate : candidates) {
+        try {
+            deleteDir()
+            if (credentialsId?.trim()) {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "*/${candidate}"]],
+                    userRemoteConfigs: [[
+                        url: repoUrl,
+                        credentialsId: credentialsId.trim()
+                    ]]
+                ])
+            } else {
+                git url: repoUrl, branch: candidate
+            }
+            return candidate
+        } catch (Exception err) {
+            lastError = err
+            echo "Checkout failed for branch '${candidate}' from ${repoUrl}: ${err.getMessage()}"
+        }
+    }
+
+    throw lastError ?: new RuntimeException("Could not checkout ${repoUrl} from any candidate branch: ${candidates.join(', ')}")
 }
