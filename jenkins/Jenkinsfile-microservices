@@ -607,8 +607,11 @@ pipeline {
         always {
             script {
                 echo 'Keeping workspace on disk to allow Git and build cache reuse between runs.'
+                // Clean up Gradle/Maven caches left in service-plan clones
+                sh 'find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle-home" -type d -exec rm -rf {} + 2>/dev/null || true'
+                sh 'find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle" -type d -exec rm -rf {} + 2>/dev/null || true'
             }
-        }
+    }
     }
 }
 
@@ -1235,7 +1238,8 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
                         shallow: true,
                         depth: 1,
                         noTags: true,
-                        timeout: 60
+                        honorRefspec: true,
+                        timeout: 60,
                     ],
                     [$class: 'CheckoutOption', timeout: 60],
                     [$class: 'CleanBeforeCheckout', deleteUntrackedNestedRepositories: true]

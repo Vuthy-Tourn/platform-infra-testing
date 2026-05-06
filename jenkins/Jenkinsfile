@@ -547,6 +547,7 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
                         shallow: true,
                         depth: 1,
                         noTags: true,
+                        honorRefspec: true,
                         timeout: 60
                     ],
                     [$class: 'CheckoutOption', timeout: 60],
