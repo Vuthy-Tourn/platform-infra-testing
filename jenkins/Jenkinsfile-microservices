@@ -1250,9 +1250,21 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
         } catch (Exception err) {
             lastError = err
             echo "Checkout failed for branch '${candidate}' from ${repoUrl}: ${err.getMessage()}"
+            if (!isBranchResolutionFailure(err)) {
+                throw err
+            }
             sh 'rm -rf .git .gradle-home .gradle || true'
         }
     }
 
     throw lastError ?: new RuntimeException("Could not checkout ${repoUrl}")
+}
+
+def isBranchResolutionFailure(Exception err) {
+    def message = err?.getMessage() ?: ''
+    return message.contains("Couldn't find any revision to build")
+        || message.contains("Couldn't find remote ref")
+        || message.contains("Couldn't find branch")
+        || message.contains("Couldn't find any commit")
+        || message.contains("Couldn't resolve")
 }
