@@ -521,10 +521,20 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
     def candidates = buildRepoBranchCandidates(requestedBranch)
     def lastError = null
 
+    // Force-clean the workspace directory before any git operation.
+    // Uses root-capable rm to handle files written by Docker/Gradle daemons
+    // that the jenkins user cannot overwrite.
+    sh '''
+        if [ -d .git ]; then
+            git -C . clean -fdx || true
+            git -C . reset --hard || true
+        fi
+        # Remove known build-tool cache dirs that cause write conflicts
+        rm -rf .gradle-home .gradle .m2 target build dist node_modules || true
+    '''
+
     for (String candidate : candidates) {
         try {
-            deleteDir()
-
             checkout([
                 $class: 'GitSCM',
                 branches: [[name: "*/${candidate}"]],
@@ -537,9 +547,10 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
                         shallow: true,
                         depth: 1,
                         noTags: true,
-                        timeout: 30
+                        timeout: 60
                     ],
-                    [$class: 'CheckoutOption', timeout: 30]
+                    [$class: 'CheckoutOption', timeout: 60],
+                    [$class: 'CleanBeforeCheckout', deleteUntrackedNestedRepositories: true]
                 ]
             ])
 
@@ -547,6 +558,7 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
         } catch (Exception err) {
             lastError = err
             echo "Checkout failed for branch '${candidate}' from ${repoUrl}: ${err.getMessage()}"
+            sh 'rm -rf .git .gradle-home .gradle || true'
         }
     }
 
