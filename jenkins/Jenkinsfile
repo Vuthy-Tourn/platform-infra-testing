@@ -524,18 +524,25 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
     for (String candidate : candidates) {
         try {
             deleteDir()
-            if (credentialsId?.trim()) {
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: "*/${candidate}"]],
-                    userRemoteConfigs: [[
-                        url: repoUrl,
-                        credentialsId: credentialsId.trim()
-                    ]]
-                ])
-            } else {
-                git url: repoUrl, branch: candidate
-            }
+
+            checkout([
+                $class: 'GitSCM',
+                branches: [[name: "*/${candidate}"]],
+                userRemoteConfigs: [[
+                    url: repoUrl,
+                    credentialsId: credentialsId?.trim() ?: null
+                ]],
+                extensions: [
+                    [$class: 'CloneOption',
+                        shallow: true,
+                        depth: 1,
+                        noTags: true,
+                        timeout: 30
+                    ],
+                    [$class: 'CheckoutOption', timeout: 30]
+                ]
+            ])
+
             return candidate
         } catch (Exception err) {
             lastError = err
@@ -543,5 +550,5 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
         }
     }
 
-    throw lastError ?: new RuntimeException("Could not checkout ${repoUrl} from any candidate branch: ${candidates.join(', ')}")
+    throw lastError ?: new RuntimeException("Could not checkout ${repoUrl}")
 }
