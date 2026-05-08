@@ -315,7 +315,7 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent { label 'master' }
+            agent { label 'istad' }
             steps {
                 script {
                     // Clear restored directories first so unstash cannot leave behind
@@ -409,7 +409,7 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent { label 'trivy' }
+            agent { label 'istad' }
             steps {
                 unstash 'built-image-tar'
                 withCredentials([usernamePassword(
