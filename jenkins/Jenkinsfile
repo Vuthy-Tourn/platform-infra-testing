@@ -508,6 +508,10 @@ def buildRepoBranchCandidates(String requestedBranch) {
         return ['main', 'master']
     }
 
+    if (normalizedBranch.startsWith('refs/tags/')) {
+        return [normalizedBranch]
+    }
+
     def candidates = [normalizedBranch]
     if (normalizedBranch == 'main') {
         candidates << 'master'
@@ -535,6 +539,32 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
 
     for (String candidate : candidates) {
         try {
+            if (candidate.startsWith('refs/tags/')) {
+                def tagName = candidate.substring('refs/tags/'.length())
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "refs/tags/${tagName}"]],
+                    userRemoteConfigs: [[
+                        url: repoUrl,
+                        credentialsId: credentialsId?.trim() ?: null,
+                        refspec: "+refs/tags/${tagName}:refs/tags/${tagName}"
+                    ]],
+                    extensions: [
+                        [$class: 'CloneOption',
+                            shallow: true,
+                            depth: 1,
+                            noTags: false,
+                            honorRefspec: true,
+                            timeout: 60
+                        ],
+                        [$class: 'CheckoutOption', timeout: 60],
+                        [$class: 'CleanBeforeCheckout', deleteUntrackedNestedRepositories: true]
+                    ]
+                ])
+
+                return candidate
+            }
+
             checkout([
                 $class: 'GitSCM',
                 branches: [[name: "*/${candidate}"]],
