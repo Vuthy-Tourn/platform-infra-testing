@@ -877,7 +877,7 @@ def servicesStateToJson(String state) {
             svc.imageTag ?: '',
             svc.mergedEnvJson ?: '[]',
             svc.runtimeConfigFileName ?: '',
-            svc.runtimeConfigFileContent ? svc.runtimeConfigFileContent.bytes.encodeBase64().toString() : '',
+            svc.runtimeConfigFileContent ? Base64.getEncoder().encodeToString(svc.runtimeConfigFileContent.bytes) : '',
             svc.syncWave ?: '0',
             (svc.exposePublic  ? 'true' : 'false'),
             (svc.primaryPublic ? 'true' : 'false')
@@ -934,7 +934,7 @@ def encodeServicesForState(List services) {
             svc.commitSha,
             svc.mergedEnvJson,
             svc.runtimeConfigFileName,
-            svc.runtimeConfigFileContent ? svc.runtimeConfigFileContent.bytes.encodeBase64().toString() : '',
+            svc.runtimeConfigFileContent ? Base64.getEncoder().encodeToString(svc.runtimeConfigFileContent.bytes) : '',
             ((svc.dependsOn ?: []).collect { it?.toString() ?: '' }.findAll { it }.join('\u001f')),
             svc.relationshipsToken,
             svc.syncWave,
