@@ -612,7 +612,7 @@ def topologicalSort(List services) {
 }
 
 def buildSyncWaveMap(List services) {
-    def nameToSvc = services.collectEntries { [(it.name): it] }
+    def nameToSvc  = services.collectEntries { [(it.name): it] }
     def waveByName = [:]
 
     services.each { svc ->
@@ -620,7 +620,8 @@ def buildSyncWaveMap(List services) {
         if (!deps) {
             waveByName[svc.name] = 0
         } else {
-            def maxWave = deps.collect { dep -> (waveByName[dep] ?: 0) as Integer }.max()
+            def waves   = deps.collect { dep -> (waveByName[dep] ?: 0) as Integer }
+            def maxWave = waves.isEmpty() ? 0 : Collections.max(waves)
             waveByName[svc.name] = maxWave + 1
         }
     }
