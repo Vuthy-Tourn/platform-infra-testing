@@ -266,7 +266,7 @@ pipeline {
 
                     def parallelBuilds = [:]
                     // Synchronized list — parallel branches append results concurrently.
-                    def failures = [].asSynchronized()
+                    def failures = Collections.synchronizedList([])
 
                     services.each { svc ->
                         if (selectiveBuild && !changedServiceNames.contains(svc.name?.toString()?.trim())) {
