@@ -2,9 +2,21 @@
 {{- $ctx := dict "root" $ "service" $service }}
 {{- $probeMode := default "http" $service.probes.mode }}
 {{- $envJson := trim (default "" $service.envJson) }}
-{{- $envVars := $service.env | default (list) }}
+{{- $envEntries := $service.env | default (list) }}
+{{- $runtimeConfigFileName := trim (default "" $service.runtimeConfigFileName) }}
+{{- $runtimeConfigFileContent := default "" $service.runtimeConfigFileContent }}
+{{- $hasRuntimeConfig := and $runtimeConfigFileName (ne (trim $runtimeConfigFileContent) "") }}
 {{- if $envJson }}
-{{- $envVars = fromJsonArray $envJson }}
+{{- $envEntries = fromJsonArray $envJson }}
+{{- end }}
+{{- $envVars := list }}
+{{- $secretEnvVars := list }}
+{{- range $envEntry := $envEntries }}
+  {{- if $envEntry.secret }}
+    {{- $secretEnvVars = append $secretEnvVars (dict "name" (toString $envEntry.name) "value" (default "" $envEntry.value)) }}
+  {{- else }}
+    {{- $envVars = append $envVars (dict "name" (toString $envEntry.name) "value" (default "" $envEntry.value)) }}
+  {{- end }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -25,6 +37,9 @@ spec:
     metadata:
       annotations:
         argocd.argoproj.io/sync-wave: {{ include "tenant-app.syncWave" $ctx | quote }}
+        {{- if $hasRuntimeConfig }}
+        platform.devops/runtime-config-checksum: {{ sha256sum $runtimeConfigFileContent | quote }}
+        {{- end }}
       labels:
         app.kubernetes.io/name: {{ include "tenant-app.serviceName" $ctx }}
         app.kubernetes.io/instance: {{ $.Release.Name }}
@@ -47,8 +62,30 @@ spec:
             - containerPort: {{ $service.containerPort }}
               name: http
           {{- if $envVars }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "tenant-app.runtimeEnvConfigMapName" $ctx }}
+          {{- end }}
+          {{- if or $secretEnvVars $hasRuntimeConfig }}
           env:
-            {{- toYaml $envVars | nindent 12 }}
+            {{- range $secretEnvVars }}
+            - name: {{ .name | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tenant-app.runtimeSecretName" $ctx }}
+                  key: {{ .name | quote }}
+            {{- end }}
+            {{- if $hasRuntimeConfig }}
+            - name: SPRING_CONFIG_ADDITIONAL_LOCATION
+              value: {{ printf "file:/opt/app/runtime-config/%s" $runtimeConfigFileName | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if $hasRuntimeConfig }}
+          volumeMounts:
+            - name: runtime-config
+              mountPath: {{ printf "/opt/app/runtime-config/%s" $runtimeConfigFileName | quote }}
+              subPath: {{ $runtimeConfigFileName | quote }}
+              readOnly: true
           {{- end }}
           resources:
             {{- toYaml (default $.Values.defaults.resources $service.resources) | nindent 12 }}
@@ -97,6 +134,12 @@ spec:
       {{- with $.Values.defaults.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $hasRuntimeConfig }}
+      volumes:
+        - name: runtime-config
+          configMap:
+            name: {{ include "tenant-app.runtimeConfigMapName" $ctx }}
       {{- end }}
       {{- with $.Values.defaults.affinity }}
       affinity:

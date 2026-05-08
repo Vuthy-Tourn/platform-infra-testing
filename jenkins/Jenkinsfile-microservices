@@ -1,11 +1,16 @@
 /**
  * Microservices Orchestrator Pipeline
  *
- * Performance improvements applied:
- *   1. platform-infra is stashed after 'Checkout infra' — no re-checkout in GitOps stage.
- *   2. resolveCommitAndFramework runs in parallel across all services in 'Prepare release plan'.
- *   3. 'Build and push services' triggers all child jobs in parallel instead of sequentially.
- *   4. gitops-batch uses fetch+reset when the dir already exists (preserved from prior runs).
+ * Improvements over previous version:
+ *   1. mergeEnvAndRelationships — temp file is now unique per service (index-scoped)
+ *      to eliminate write-race when called from parallel branches.
+ *   2. resolveRelationshipsToken — same fix: index-scoped temp files.
+ *   3. failures list — writes are now synchronized so parallel build branches
+ *      cannot corrupt the list with concurrent appends.
+ *   4. platform-infra is stashed after 'Checkout infra' — no re-checkout needed in GitOps stage.
+ *   5. resolveCommitAndFramework runs in parallel across all services in 'Prepare release plan'.
+ *   6. 'Build and push services' triggers all child jobs in parallel.
+ *   7. gitops-batch uses fetch+reset when the directory already exists (preserves cache).
  */
 pipeline {
     agent { label 'master' }
@@ -17,23 +22,23 @@ pipeline {
     }
 
     parameters {
-        string(name: 'USER_ID', defaultValue: '', description: 'Tenant user ID')
-        string(name: 'WORKSPACE_ID', defaultValue: '', description: 'Workspace ID / slug')
-        string(name: 'PROJECT_NAME', defaultValue: 'workspace-stack', description: 'Workspace-level stack name written to GitOps')
-        string(name: 'PLATFORM_DOMAIN', defaultValue: 'autonomous-istad.com', description: 'Wildcard platform domain')
-        string(name: 'GITOPS_BRANCH', defaultValue: 'main', description: 'GitOps branch to update')
-        string(name: 'SERVICE_JOB_NAME', defaultValue: 'deploy-service-test', description: 'Jenkins job name used to deploy one service')
-        string(name: 'SONARQUBE_SERVER_NAME', defaultValue: 'sonarqube', description: 'Jenkins SonarQube server configuration name')
-        string(name: 'SONARQUBE_SCANNER_TOOL', defaultValue: '', description: 'Optional Jenkins SonarScanner tool name; empty uses sonar-scanner from PATH')
+        string(name: 'USER_ID',                   defaultValue: '', description: 'Tenant user ID')
+        string(name: 'WORKSPACE_ID',              defaultValue: '', description: 'Workspace ID / slug')
+        string(name: 'PROJECT_NAME',              defaultValue: 'workspace-stack', description: 'Workspace-level stack name written to GitOps')
+        string(name: 'PLATFORM_DOMAIN',           defaultValue: 'autonomous-istad.com', description: 'Wildcard platform domain')
+        string(name: 'GITOPS_BRANCH',             defaultValue: 'main', description: 'GitOps branch to update')
+        string(name: 'SERVICE_JOB_NAME',          defaultValue: 'deploy-service-test', description: 'Jenkins job name used to deploy one service')
+        string(name: 'SONARQUBE_SERVER_NAME',     defaultValue: 'sonarqube', description: 'Jenkins SonarQube server configuration name')
+        string(name: 'SONARQUBE_SCANNER_TOOL',    defaultValue: '', description: 'Optional Jenkins SonarScanner tool name; empty uses sonar-scanner from PATH')
         string(name: 'SONARQUBE_JDK_TOOL_PREFIX', defaultValue: 'jdk', description: 'Jenkins JDK tool name prefix used for Java SonarQube analysis (example: jdk -> jdk21)')
-        booleanParam(name: 'ENABLE_GITOPS_UPDATE', defaultValue: true, description: 'Update GitOps repository once after all service builds succeed')
-        booleanParam(name: 'ENABLE_SONARQUBE_SCAN', defaultValue: false, description: 'Run SonarQube source analysis for each changed service')
+        booleanParam(name: 'ENABLE_GITOPS_UPDATE',        defaultValue: true,  description: 'Update GitOps repository once after all service builds succeed')
+        booleanParam(name: 'ENABLE_SONARQUBE_SCAN',       defaultValue: false, description: 'Run SonarQube source analysis for each changed service')
         booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', defaultValue: false, description: 'Wait for SonarQube quality gate before continuing each service build')
-        booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Rollback all services to saved image tags')
-        booleanParam(name: 'GITOPS_ONLY_UPDATE', defaultValue: false, description: 'Skip service builds and update GitOps only using the provided image tags')
-        booleanParam(name: 'DESTROY_MODE', defaultValue: false, description: 'Remove this microservice project from GitOps and tear down its runtime resources')
-        string(name: 'SERVICES_JSON', defaultValue: '[]', description: 'JSON array of service descriptors')
-        string(name: 'CHANGED_SERVICES', defaultValue: '', description: 'Optional comma-separated service names to rebuild during webhook-triggered updates')
+        booleanParam(name: 'ROLLBACK_MODE',               defaultValue: false, description: 'Rollback all services to saved image tags')
+        booleanParam(name: 'GITOPS_ONLY_UPDATE',          defaultValue: false, description: 'Skip service builds and update GitOps only using the provided image tags')
+        booleanParam(name: 'DESTROY_MODE',                defaultValue: false, description: 'Remove this microservice project from GitOps and tear down its runtime resources')
+        string(name: 'SERVICES_JSON',             defaultValue: '[]', description: 'JSON array of service descriptors')
+        string(name: 'CHANGED_SERVICES',          defaultValue: '', description: 'Optional comma-separated service names to rebuild during webhook-triggered updates')
     }
 
     environment {
@@ -43,6 +48,8 @@ pipeline {
     }
 
     stages {
+
+        // ──────────────────────────────────────────────────────────────────────
         stage('Validate') {
             steps {
                 script {
@@ -80,22 +87,23 @@ pipeline {
                     }
 
                     env.EFFECTIVE_WORKSPACE_ID = params.WORKSPACE_ID?.trim() ?: params.USER_ID.trim()
-                    env.SAFE_USER_ID = slugify(params.USER_ID, 30)
-                    env.SAFE_WORKSPACE_ID = slugify(env.EFFECTIVE_WORKSPACE_ID, 30)
-                    env.SAFE_STACK_NAME = slugify(params.PROJECT_NAME?.trim() ?: 'workspace-stack', 40)
+                    env.SAFE_USER_ID           = slugify(params.USER_ID, 30)
+                    env.SAFE_WORKSPACE_ID      = slugify(env.EFFECTIVE_WORKSPACE_ID, 30)
+                    env.SAFE_STACK_NAME        = slugify(params.PROJECT_NAME?.trim() ?: 'workspace-stack', 40)
 
                     def registryContext = resolveRegistryContext(env.REGISTRY_REPOSITORY ?: '')
                     env.NORMALIZED_REGISTRY_REPOSITORY = registryContext.repositoryRoot
-                    env.REGISTRY_LOGIN_SERVER = registryContext.loginServer
+                    env.REGISTRY_LOGIN_SERVER          = registryContext.loginServer
 
                     echo "Validated ${services.size()} service(s) for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
-                    echo "Workspace stack name: ${env.SAFE_STACK_NAME}"
-                    echo "Deployment namespace (from workspace): ${env.SAFE_WORKSPACE_ID}"
-                    echo "Downstream service job: ${params.SERVICE_JOB_NAME}"
+                    echo "Workspace stack name    : ${env.SAFE_STACK_NAME}"
+                    echo "Deployment namespace    : ${env.SAFE_WORKSPACE_ID}"
+                    echo "Downstream service job  : ${params.SERVICE_JOB_NAME}"
                 }
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
         stage('Checkout infra') {
             steps {
                 dir('platform-infra') {
@@ -113,10 +121,7 @@ pipeline {
                         script: '''
                             set -e
                             for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
-                                if [ -f "$d/detect-framework.sh" ]; then
-                                    echo "$d"
-                                    exit 0
-                                fi
+                                if [ -f "$d/detect-framework.sh" ]; then echo "$d"; exit 0; fi
                             done
                             echo "ERROR: infra Jenkins scripts directory not found." >&2
                             exit 1
@@ -124,55 +129,53 @@ pipeline {
                         returnStdout: true
                     ).trim()
                 }
-                // Stash infra once — reused in GitOps stage without re-checkout
+                // Stash once — reused in GitOps stage without re-checkout
                 stash name: 'platform-infra-src', includes: 'platform-infra/**'
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
         stage('Resolve deploy order') {
             steps {
                 script {
                     def services = parseJson(params.SERVICES_JSON)
-                    def ordered = topologicalSort(services)
-                    env.ORDERED_SERVICE_NAMES = ordered.collect { it.name }.join(',')
+                    def ordered  = topologicalSort(services)
+                    env.ORDERED_SERVICE_NAMES  = ordered.collect { it.name }.join(',')
                     env.ORDERED_SERVICES_STATE = encodeServicesForState(ordered)
                     echo "Deploy order: ${env.ORDERED_SERVICE_NAMES}"
                 }
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
         stage('Prepare release plan') {
             when {
                 expression { return !params.DESTROY_MODE }
             }
             steps {
                 script {
-                    def services = decodeServicesFromState(env.ORDERED_SERVICES_STATE)
+                    def services         = decodeServicesFromState(env.ORDERED_SERVICES_STATE)
                     def syncWaveByService = buildSyncWaveMap(services)
 
-                    // Resolve commit SHA + framework for all services IN PARALLEL
-                    // (skipped in rollback mode — no repo clone needed)
-                    // Each branch writes to its own key — no shared-state conflict, no synchronized needed.
+                    // Resolve commit SHA + framework for all services IN PARALLEL.
+                    // Each branch writes to its own map key — no shared-state conflict.
+                    // Temp files inside resolveCommitAndFramework use the service index
+                    // for uniqueness so concurrent calls never collide.
                     def resolvedMetadata = [:]
                     if (!params.ROLLBACK_MODE && !params.GITOPS_ONLY_UPDATE) {
                         def parallelClones = [:]
                         services.eachWithIndex { svc, index ->
                             def frameworkOverride = svc.framework?.toString()?.trim() ?: ''
-                            def branch = svc.branch?.toString()?.trim() ?: 'main'
-                            def safeProjectName = slugify(svc.name.toString().trim(), 40)
-                            def capturedSvc = svc
-                            def capturedIndex = index
-                            def capturedName = svc.name.toString().trim()
+                            def branch            = svc.branch?.toString()?.trim() ?: 'main'
+                            def safeProjectName   = slugify(svc.name.toString().trim(), 40)
+                            def capturedSvc       = svc
+                            def capturedIndex     = index
+                            def capturedName      = svc.name.toString().trim()
 
                             parallelClones["resolve-${safeProjectName}"] = {
                                 def metadata = resolveCommitAndFramework(
-                                    capturedSvc,
-                                    branch,
-                                    safeProjectName,
-                                    capturedIndex,
-                                    frameworkOverride
+                                    capturedSvc, branch, safeProjectName, capturedIndex, frameworkOverride
                                 )
-                                // Each branch writes to a unique key — safe without synchronized
                                 resolvedMetadata[capturedName] = metadata
                             }
                         }
@@ -181,17 +184,15 @@ pipeline {
 
                     def plannedServices = []
                     services.eachWithIndex { svc, index ->
-                        def serviceName = svc.name.toString().trim()
+                        def serviceName     = svc.name.toString().trim()
                         def safeProjectName = slugify(serviceName, 40)
                         def imageRepository = buildImageRepository(
-                            env.NORMALIZED_REGISTRY_REPOSITORY,
-                            safeProjectName,
-                            env.SAFE_USER_ID
+                            env.NORMALIZED_REGISTRY_REPOSITORY, safeProjectName, env.SAFE_USER_ID
                         )
 
-                        def branch = svc.branch?.toString()?.trim() ?: 'main'
+                        def branch            = svc.branch?.toString()?.trim() ?: 'main'
                         def frameworkOverride = svc.framework?.toString()?.trim() ?: ''
-                        def metadata = (params.ROLLBACK_MODE || params.GITOPS_ONLY_UPDATE)
+                        def metadata          = (params.ROLLBACK_MODE || params.GITOPS_ONLY_UPDATE)
                             ? [
                                 commitSha: params.ROLLBACK_MODE
                                     ? "rollback-${svc.imageTag.toString().trim()}"
@@ -201,50 +202,53 @@ pipeline {
                             ]
                             : resolvedMetadata[serviceName]
 
-                        def commitSha = metadata.commitSha
-                        def framework = metadata.framework
+                        def commitSha     = metadata.commitSha
+                        def framework     = metadata.framework
                         def resolvedBranch = metadata.branch ?: branch
-                        def imageTag = svc.imageTag?.toString()?.trim()
+                        def imageTag      = svc.imageTag?.toString()?.trim()
                             ? svc.imageTag.toString().trim()
                             : "${env.BUILD_NUMBER}-${commitSha}"
+
+                        // Pass index so the helper can create unique temp files
                         def relationshipsToken = resolveRelationshipsToken(
-                            svc,
-                            services,
-                            env.EFFECTIVE_WORKSPACE_ID,
-                            env.SAFE_STACK_NAME
+                            svc, services, env.EFFECTIVE_WORKSPACE_ID, env.SAFE_STACK_NAME, index
                         )
 
                         plannedServices << [
-                            name               : serviceName,
-                            repoUrl            : svc.repoUrl?.toString()?.trim() ?: '',
-                            branch             : resolvedBranch,
-                            repoCredentialsId  : svc.repoCredentialsId?.toString()?.trim() ?: '',
-                            framework          : framework,
-                            appPort            : svc.appPort?.toString()?.trim() ?: '8080',
-                            imageTag           : imageTag,
-                            envJson            : svc.envJson?.toString()?.trim() ?: '[]',
-                            relationshipsToken : relationshipsToken,
-                            dependsOn          : svc.dependsOn ?: [],
-                            serviceType        : svc.serviceType?.toString()?.trim() ?: 'internal',
-                            exposePublic       : (svc.exposePublic == true),
-                            primaryPublic      : (svc.exposePublic == true) && (svc.primaryPublic == true),
-                            mergedEnvJson      : mergeEnvAndRelationships(
+                            name                : serviceName,
+                            repoUrl             : svc.repoUrl?.toString()?.trim() ?: '',
+                            branch              : resolvedBranch,
+                            repoCredentialsId   : svc.repoCredentialsId?.toString()?.trim() ?: '',
+                            framework           : framework,
+                            appPort             : svc.appPort?.toString()?.trim() ?: '8080',
+                            imageTag            : imageTag,
+                            envJson             : svc.envJson?.toString()?.trim() ?: '[]',
+                            relationshipsToken  : relationshipsToken,
+                            dependsOn           : svc.dependsOn ?: [],
+                            serviceType         : svc.serviceType?.toString()?.trim() ?: 'internal',
+                            exposePublic        : (svc.exposePublic == true),
+                            primaryPublic       : (svc.exposePublic == true) && (svc.primaryPublic == true),
+                            // Pass index so mergeEnvAndRelationships temp file is unique per service
+                            mergedEnvJson       : mergeEnvAndRelationships(
                                 svc.envJson?.toString()?.trim() ?: '[]',
-                                relationshipsToken
+                                relationshipsToken,
+                                index
                             ),
-                            imageRepository    : imageRepository,
-                            commitSha          : commitSha,
-                            customDomain       : svc.customDomain?.toString()?.trim() ?: '',
+                            imageRepository     : imageRepository,
+                            commitSha           : commitSha,
+                            customDomain        : svc.customDomain?.toString()?.trim() ?: '',
                             platformHostOverride: svc.platformHostOverride?.toString()?.trim() ?: '',
-                            syncWave           : (syncWaveByService[serviceName] ?: 0).toString()
+                            syncWave            : (syncWaveByService[serviceName] ?: 0).toString()
                         ]
                     }
+
                     env.PLANNED_SERVICES_STATE = encodeServicesForState(plannedServices)
                     echo "Prepared release plan for ${plannedServices.size()} service(s)"
                 }
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
         stage('Build and push services') {
             when {
                 expression { return !params.DESTROY_MODE && !params.ROLLBACK_MODE && !params.GITOPS_ONLY_UPDATE }
@@ -252,18 +256,17 @@ pipeline {
             agent { label 'istad' }
             steps {
                 script {
-                    def services = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
+                    def services           = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
                     def changedServiceNames = parseServiceSelection(params.CHANGED_SERVICES)
-                    def selectiveBuild = !params.ROLLBACK_MODE && !params.DESTROY_MODE && !changedServiceNames.isEmpty()
+                    def selectiveBuild     = !params.ROLLBACK_MODE && !params.DESTROY_MODE && !changedServiceNames.isEmpty()
 
                     if (selectiveBuild) {
-                        echo "Selective rebuild enabled for service(s): ${changedServiceNames.join(', ')}"
+                        echo "Selective rebuild enabled for: ${changedServiceNames.join(', ')}"
                     }
 
-                    // Build all services IN PARALLEL — each delegates to its own child job
                     def parallelBuilds = [:]
-                    // Plain list is safe — Jenkins CPS parallel is cooperative, not truly concurrent
-                    def failures = []
+                    // Synchronized list — parallel branches append results concurrently.
+                    def failures = [].asSynchronized()
 
                     services.each { svc ->
                         if (selectiveBuild && !changedServiceNames.contains(svc.name?.toString()?.trim())) {
@@ -273,57 +276,44 @@ pipeline {
 
                         def capturedSvc = svc
                         parallelBuilds["build-${capturedSvc.name}"] = {
-                            echo "=== Building service: ${capturedSvc.name} (type: ${capturedSvc.serviceType}) ==="
-                            echo "[service:${capturedSvc.name}] Triggering child job '${params.SERVICE_JOB_NAME}'"
-
+                            echo "=== Building: ${capturedSvc.name} (type: ${capturedSvc.serviceType}) ==="
                             try {
                                 def downstreamBuild = build job: params.SERVICE_JOB_NAME,
-                                    wait: true,
+                                    wait     : true,
                                     propagate: false,
                                     parameters: [
-                                        string(name: 'REPO_URL', value: capturedSvc.repoUrl),
-                                        string(name: 'BRANCH', value: capturedSvc.branch),
-                                        string(name: 'USER_ID', value: params.USER_ID),
-                                        string(name: 'WORKSPACE_ID', value: env.EFFECTIVE_WORKSPACE_ID),
-                                        string(name: 'PROJECT_NAME', value: capturedSvc.name),
-                                        string(name: 'FRAMEWORK', value: capturedSvc.framework),
-                                        string(name: 'IMAGE_TAG', value: capturedSvc.imageTag),
-                                        string(name: 'REPO_CREDENTIALS_ID', value: capturedSvc.repoCredentialsId),
-                                        string(name: 'SONARQUBE_SERVER_NAME', value: params.SONARQUBE_SERVER_NAME),
-                                        string(name: 'SONARQUBE_SCANNER_TOOL', value: params.SONARQUBE_SCANNER_TOOL),
-                                        string(name: 'SONARQUBE_JDK_TOOL_PREFIX', value: params.SONARQUBE_JDK_TOOL_PREFIX),
-                                        booleanParam(name: 'ENABLE_SONARQUBE_SCAN', value: params.ENABLE_SONARQUBE_SCAN),
+                                        string(name: 'REPO_URL',                   value: capturedSvc.repoUrl),
+                                        string(name: 'BRANCH',                     value: capturedSvc.branch),
+                                        string(name: 'USER_ID',                    value: params.USER_ID),
+                                        string(name: 'WORKSPACE_ID',               value: env.EFFECTIVE_WORKSPACE_ID),
+                                        string(name: 'PROJECT_NAME',               value: capturedSvc.name),
+                                        string(name: 'FRAMEWORK',                  value: capturedSvc.framework),
+                                        string(name: 'IMAGE_TAG',                  value: capturedSvc.imageTag),
+                                        string(name: 'REPO_CREDENTIALS_ID',        value: capturedSvc.repoCredentialsId),
+                                        string(name: 'SONARQUBE_SERVER_NAME',      value: params.SONARQUBE_SERVER_NAME),
+                                        string(name: 'SONARQUBE_SCANNER_TOOL',     value: params.SONARQUBE_SCANNER_TOOL),
+                                        string(name: 'SONARQUBE_JDK_TOOL_PREFIX',  value: params.SONARQUBE_JDK_TOOL_PREFIX),
+                                        booleanParam(name: 'ENABLE_SONARQUBE_SCAN',         value: params.ENABLE_SONARQUBE_SCAN),
                                         booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', value: params.ENABLE_SONARQUBE_QUALITY_GATE),
-                                        booleanParam(name: 'ROLLBACK_MODE', value: params.ROLLBACK_MODE)
+                                        booleanParam(name: 'ROLLBACK_MODE',                 value: params.ROLLBACK_MODE)
                                     ]
 
-                                def childBuildNumber = downstreamBuild?.number?.toString() ?: 'unknown'
-                                def childBuildResult = downstreamBuild?.result?.toString()?.trim() ?: 'UNKNOWN'
-                                def childBuildUrl = downstreamBuild?.absoluteUrl?.toString()?.trim() ?: ''
-                                def childBuildUrlSuffix = childBuildUrl ? " · ${childBuildUrl}" : ''
+                                def childNumber = downstreamBuild?.number?.toString() ?: 'unknown'
+                                def childResult = downstreamBuild?.result?.toString()?.trim() ?: 'UNKNOWN'
+                                def childUrl    = downstreamBuild?.absoluteUrl?.toString()?.trim() ?: ''
+                                def urlSuffix   = childUrl ? " · ${childUrl}" : ''
 
-                                echo "[service:${capturedSvc.name}] Child build #${childBuildNumber} finished with result ${childBuildResult}${childBuildUrlSuffix}"
+                                echo "[service:${capturedSvc.name}] Child build #${childNumber} → ${childResult}${urlSuffix}"
 
-                                if (childBuildResult != 'SUCCESS') {
-                                    failures << [
-                                        name   : capturedSvc.name,
-                                        result : childBuildResult,
-                                        build  : childBuildNumber,
-                                        url    : childBuildUrl
-                                    ]
-                                    echo "=== ${capturedSvc.name}: FAILED (${childBuildResult}) ==="
+                                if (childResult != 'SUCCESS') {
+                                    failures << [name: capturedSvc.name, result: childResult, build: childNumber, url: childUrl]
+                                    echo "=== ${capturedSvc.name}: FAILED (${childResult}) ==="
                                 } else {
-                                    echo "=== ${capturedSvc.name}: built successfully ==="
+                                    echo "=== ${capturedSvc.name}: SUCCESS ==="
                                 }
                             } catch (Exception e) {
-                                echo "=== ${capturedSvc.name}: FAILED — ${e.message} ==="
-                                failures << [
-                                    name   : capturedSvc.name,
-                                    result : 'ERROR',
-                                    build  : 'unknown',
-                                    url    : '',
-                                    detail : e.message
-                                ]
+                                echo "=== ${capturedSvc.name}: EXCEPTION — ${e.message} ==="
+                                failures << [name: capturedSvc.name, result: 'ERROR', build: 'unknown', url: '', detail: e.message]
                             }
                         }
                     }
@@ -331,22 +321,27 @@ pipeline {
                     parallel parallelBuilds
 
                     if (failures) {
-                        failures.each { failure ->
-                            def failureUrlSuffix = failure.url ? " · ${failure.url}" : ''
-                            def failureDetailSuffix = failure.detail ? " · ${failure.detail}" : ''
-                            echo "[service:${failure.name}] FAILURE SUMMARY · result=${failure.result} · build=#${failure.build}${failureUrlSuffix}${failureDetailSuffix}"
+                        failures.each { f ->
+                            def urlSuffix    = f.url    ? " · ${f.url}"    : ''
+                            def detailSuffix = f.detail ? " · ${f.detail}" : ''
+                            echo "[FAILURE] ${f.name} — result=${f.result} build=#${f.build}${urlSuffix}${detailSuffix}"
                         }
-                        error("The following services failed to build/deploy: ${failures.collect { it.name }.join(', ')}")
+                        error("Services failed: ${failures.collect { it.name }.join(', ')}")
                     }
                 }
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
         stage('Update GitOps repository (batched)') {
             when {
-                expression { return params.ENABLE_GITOPS_UPDATE || params.DESTROY_MODE || params.ROLLBACK_MODE || params.GITOPS_ONLY_UPDATE }
+                expression {
+                    return params.ENABLE_GITOPS_UPDATE ||
+                        params.DESTROY_MODE ||
+                        params.ROLLBACK_MODE ||
+                        params.GITOPS_ONLY_UPDATE
+                }
             }
-
             steps {
                 script {
                     // Restore infra from stash — no re-checkout needed
@@ -363,9 +358,9 @@ pipeline {
                         : (params.ROLLBACK_MODE ? 'rollback' : (params.GITOPS_ONLY_UPDATE ? 'config-update' : 'deploy'))
 
                     if (params.ROLLBACK_MODE) {
-                        echo "Rollback mode: skipping child build jobs and updating GitOps to saved image tags only."
+                        echo "Rollback mode: updating GitOps to saved image tags only."
                     } else if (params.GITOPS_ONLY_UPDATE) {
-                        echo "GitOps-only update mode: skipping child build jobs and updating manifests only."
+                        echo "GitOps-only update mode: skipping child build jobs."
                     }
 
                     def workspaceCommitMessage =
@@ -383,14 +378,12 @@ pipeline {
                         usernameVariable: 'GITOPS_USERNAME',
                         passwordVariable: 'GITOPS_TOKEN'
                     )]) {
-
                         sh '''
                             set -e
 
                             test -f "$WORKSPACE/platform-infra/jenkins/scripts/update-gitops.sh"
 
                             AUTHED_GITOPS_REPO_URL="${GITOPS_REPO_URL}"
-
                             case "$AUTHED_GITOPS_REPO_URL" in
                             https://*)
                                 AUTHED_GITOPS_REPO_URL="$(printf '%s' "$AUTHED_GITOPS_REPO_URL" | sed "s#^https://#https://${GITOPS_USERNAME}:${GITOPS_TOKEN}@#")"
@@ -435,95 +428,69 @@ pipeline {
                                         set -e
 
                                         echo "==== STEP 1: CLEAN GITOPS FIRST ===="
-
                                         cd "$WORKSPACE/gitops-batch"
-
                                         echo "DESTROY_APP_ROOT=${DESTROY_APP_ROOT}"
                                         echo "DESTROY_APPLICATION_FILE=${DESTROY_APPLICATION_FILE}"
-
                                         ls -la "${DESTROY_APP_ROOT}" || echo "App root not found"
                                         ls -la "${DESTROY_APPLICATION_FILE}" || echo "App file not found"
-
                                         rm -rf "${DESTROY_APP_ROOT}"
-                                        rm -f "${DESTROY_APPLICATION_FILE}"
-
-                                        echo "==== GIT STATUS BEFORE ADD ===="
-                                        git status
-
+                                        rm -f  "${DESTROY_APPLICATION_FILE}"
                                         git add -A
-
-                                        echo "==== GIT STATUS AFTER ADD ===="
-                                        git status
-
                                         if git diff --cached --quiet; then
                                             echo "No GitOps cleanup changes required."
                                         else
                                             git commit -m "${DESTROY_CLEANUP_COMMIT_MESSAGE}" >/dev/null
                                             git push origin "${GITOPS_BRANCH}" >/dev/null
-                                            echo "GitOps cleanup pushed successfully."
+                                            echo "GitOps cleanup pushed."
                                         fi
 
-                                        echo "Waiting a bit for ArgoCD to sync removal..."
+                                        echo "Waiting for ArgoCD to sync removal..."
                                         sleep 10
 
                                         echo "==== STEP 2: LOGIN TO ARGOCD ===="
-
                                         LOGIN_RESPONSE=$(printf '{"username":"%s","password":"%s"}' \
                                             "${ARGOCD_USERNAME}" "${ARGOCD_PASSWORD}" | \
-                                            curl -sS --insecure \
-                                                -X POST \
+                                            curl -sS --insecure -X POST \
                                                 -H "Content-Type: application/json" \
                                                 -d @- \
                                                 "https://${ARGOCD_SERVER}/api/v1/session")
-
                                         ARGOCD_AUTH_TOKEN=$(printf '%s' "$LOGIN_RESPONSE" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')
-
                                         if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
                                             echo "ERROR: ArgoCD login failed. Response: ${LOGIN_RESPONSE}"
                                             exit 1
                                         fi
-
-                                        echo "Token obtained successfully."
+                                        echo "Token obtained."
 
                                         echo "==== STEP 3: DELETE ARGOCD APP ===="
-
                                         DELETE_CODE=$(curl -sS -o /tmp/argocd-delete-response.txt -w "%{http_code}" \
-                                            --insecure \
-                                            -X DELETE \
+                                            --insecure -X DELETE \
                                             -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
                                             -H "Content-Type: application/json" \
                                             "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?cascade=true&propagationPolicy=foreground&appNamespace=argocd")
-
                                         echo "Delete HTTP code: ${DELETE_CODE}"
                                         cat /tmp/argocd-delete-response.txt || true
                                         rm -f /tmp/argocd-delete-response.txt
-
                                         if [ "$DELETE_CODE" != "200" ] && [ "$DELETE_CODE" != "202" ] && \
-                                        [ "$DELETE_CODE" != "204" ] && [ "$DELETE_CODE" != "404" ]; then
+                                           [ "$DELETE_CODE" != "204" ] && [ "$DELETE_CODE" != "404" ]; then
                                             echo "ERROR: Failed to delete ArgoCD application."
                                             exit 1
                                         fi
 
                                         echo "==== STEP 4: WAIT FOR DELETION ===="
-
                                         DEADLINE=$(( $(date +%s) + 300 ))
-
                                         while true; do
                                             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
                                                 --insecure \
                                                 -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" \
                                                 "https://${ARGOCD_SERVER}/api/v1/applications/${DESTROY_APPLICATION_NAME}?appNamespace=argocd")
-
                                             if [ "$HTTP_CODE" = "404" ] || [ "$HTTP_CODE" = "403" ]; then
-                                                echo "Application confirmed deleted or no longer accessible."
+                                                echo "Application confirmed deleted."
                                                 break
                                             fi
-
                                             if [ $(date +%s) -gt $DEADLINE ]; then
                                                 echo "ERROR: Timed out waiting for ArgoCD deletion."
                                                 exit 1
                                             fi
-
                                             echo "HTTP ${HTTP_CODE} — still deleting, retrying in 10s..."
                                             sleep 10
                                         done
@@ -540,43 +507,37 @@ pipeline {
                             ]) {
                                 sh '''
                                     set -e
-
                                     bash "$WORKSPACE/platform-infra/jenkins/scripts/update-gitops.sh" \
-                                    --gitops-repo "${GITOPS_REPO_URL}" \
-                                    --gitops-branch "${GITOPS_BRANCH}" \
-                                    --gitops-workdir "$WORKSPACE/gitops-batch" \
-                                    --infra-repo "${INFRA_REPO_URL}" \
-                                    --infra-revision "main" \
-                                    --chart-path "helm/app-template" \
-                                    --operation "${BATCH_OPERATION}" \
-                                    --workspace-id "${EFFECTIVE_WORKSPACE_ID}" \
-                                    --user-id "${USER_ID}" \
-                                    --project-name "${BATCH_PROJECT_NAME}" \
-                                    --services-json "${BATCH_SERVICES_JSON}" \
-                                    --platform-domain "${PLATFORM_DOMAIN}" \
-                                    --commit-sha "workspace-${BUILD_NUMBER}" \
-                                    --build-number "${BUILD_NUMBER}" \
-                                    --skip-push true
+                                        --gitops-repo     "${GITOPS_REPO_URL}" \
+                                        --gitops-branch   "${GITOPS_BRANCH}" \
+                                        --gitops-workdir  "$WORKSPACE/gitops-batch" \
+                                        --infra-repo      "${INFRA_REPO_URL}" \
+                                        --infra-revision  "main" \
+                                        --chart-path      "helm/app-template" \
+                                        --operation       "${BATCH_OPERATION}" \
+                                        --workspace-id    "${EFFECTIVE_WORKSPACE_ID}" \
+                                        --user-id         "${USER_ID}" \
+                                        --project-name    "${BATCH_PROJECT_NAME}" \
+                                        --services-json   "${BATCH_SERVICES_JSON}" \
+                                        --platform-domain "${PLATFORM_DOMAIN}" \
+                                        --commit-sha      "workspace-${BUILD_NUMBER}" \
+                                        --build-number    "${BUILD_NUMBER}" \
+                                        --skip-push       true
                                 '''
                             }
 
                             withEnv(["BATCH_COMMIT_MESSAGE=${workspaceCommitMessage}"]) {
                                 sh '''
                                     set -e
-
                                     cd "$WORKSPACE/gitops-batch"
-
                                     git add apps applications templates
-
                                     if git diff --cached --quiet; then
                                         echo "No batched GitOps changes required."
                                         exit 0
                                     fi
-
                                     git commit -m "${BATCH_COMMIT_MESSAGE}" >/dev/null
                                     git push origin "${GITOPS_BRANCH}" >/dev/null
-
-                                    echo "GitOps changes pushed successfully."
+                                    echo "GitOps changes pushed."
                                 '''
                             }
                         }
@@ -590,38 +551,35 @@ pipeline {
         success {
             script {
                 if (params.DESTROY_MODE) {
-                    echo "Destroy workflow completed for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+                    echo "Destroy completed for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
                 } else {
-                    echo "All services processed successfully for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+                    echo "All services processed for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
                 }
             }
         }
         failure {
             script {
-                if (params.DESTROY_MODE) {
-                    echo "Destroy workflow failed. Check orchestrator logs."
-                } else {
-                    echo "One or more services failed. Check orchestrator logs."
-                }
+                echo params.DESTROY_MODE
+                    ? "Destroy failed. Check orchestrator logs."
+                    : "One or more services failed. Check orchestrator logs."
             }
         }
         always {
             script {
-                echo 'Keeping workspace on disk to allow Git and build cache reuse between runs.'
-                // Clean up Gradle/Maven caches left in service-plan clones
+                echo 'Workspace kept on disk for Git and build-cache reuse.'
                 sh 'find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle-home" -type d -exec rm -rf {} + 2>/dev/null || true'
-                sh 'find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle" -type d -exec rm -rf {} + 2>/dev/null || true'
+                sh 'find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle"      -type d -exec rm -rf {} + 2>/dev/null || true'
             }
-    }
+        }
     }
 }
 
-// ─── Helper functions ────────────────────────────────────────────────────────
+// ─── Helper functions ─────────────────────────────────────────────────────────
 
 def topologicalSort(List services) {
     def nameToSvc = services.collectEntries { [(it.name): it] }
-    def inDegree = services.collectEntries { [(it.name): 0] }
-    def graph = services.collectEntries { [(it.name): []] }
+    def inDegree  = services.collectEntries { [(it.name): 0] }
+    def graph     = services.collectEntries { [(it.name): []] }
 
     services.each { svc ->
         (svc.dependsOn ?: []).each { dep ->
@@ -634,7 +592,7 @@ def topologicalSort(List services) {
         }
     }
 
-    def queue = inDegree.findAll { it.value == 0 }.keySet().toList()
+    def queue   = inDegree.findAll { it.value == 0 }.keySet().toList()
     def ordered = []
 
     while (!queue.isEmpty()) {
@@ -642,9 +600,7 @@ def topologicalSort(List services) {
         ordered << nameToSvc[current]
         graph[current].each { neighbour ->
             inDegree[neighbour]--
-            if (inDegree[neighbour] == 0) {
-                queue << neighbour
-            }
+            if (inDegree[neighbour] == 0) { queue << neighbour }
         }
     }
 
@@ -652,7 +608,6 @@ def topologicalSort(List services) {
         echo "WARNING: Cycle detected in dependsOn graph — falling back to original order"
         return services
     }
-
     ordered
 }
 
@@ -661,21 +616,14 @@ def buildSyncWaveMap(List services) {
     def waveByName = [:]
 
     services.each { svc ->
-        def dependencies = (svc.dependsOn ?: []).findAll { dep -> nameToSvc.containsKey(dep) }
-        if (!dependencies) {
+        def deps = (svc.dependsOn ?: []).findAll { dep -> nameToSvc.containsKey(dep) }
+        if (!deps) {
             waveByName[svc.name] = 0
         } else {
-            def maxWave = 0
-            dependencies.each { dep ->
-                def dependencyWave = (waveByName[dep] ?: 0) as Integer
-                if (dependencyWave > maxWave) {
-                    maxWave = dependencyWave
-                }
-            }
+            def maxWave = deps.collect { dep -> (waveByName[dep] ?: 0) as Integer }.max()
             waveByName[svc.name] = maxWave + 1
         }
     }
-
     waveByName
 }
 
@@ -686,85 +634,70 @@ def parseJson(String text) {
     try {
         def output = sh(
             script: """python3 - '${tempFile}' <<'PY'
-import base64
-import json
-import sys
+import base64, json, sys
 
-with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-    payload = json.load(handle)
+with open(sys.argv[1], 'r', encoding='utf-8') as h:
+    payload = json.load(h)
 
 if payload is None:
     payload = []
-
 if not isinstance(payload, list):
     raise SystemExit("Expected a JSON array.")
 
 fields = [
-    "name",
-    "repoUrl",
-    "branch",
-    "repoCredentialsId",
-    "framework",
-    "appPort",
-    "imageTag",
-    "envJson",
-    "serviceType",
-    "customDomain",
-    "platformHostOverride",
-    "imageRepository",
-    "commitSha",
-    "mergedEnvJson",
-    "exposePublic",
-    "primaryPublic",
+    "name", "repoUrl", "branch", "repoCredentialsId", "framework",
+    "appPort", "imageTag", "envJson", "serviceType", "customDomain",
+    "platformHostOverride", "imageRepository", "commitSha", "mergedEnvJson",
+    "runtimeConfigFileName",
+    "exposePublic", "primaryPublic",
 ]
 
 for svc in payload:
     if not isinstance(svc, dict):
         raise SystemExit("Expected each service entry to be an object.")
-
     depends_on = svc.get("dependsOn") or []
     if not isinstance(depends_on, list):
         depends_on = []
-
     if "relationshipsToken" in svc and svc.get("relationshipsToken") is not None:
         relationships_token = str(svc.get("relationshipsToken"))
     else:
-        relationships_json = json.dumps(svc.get("relationships") or [], separators=(",", ":"))
+        relationships_json  = json.dumps(svc.get("relationships") or [], separators=(",", ":"))
         relationships_token = base64.b64encode(relationships_json.encode("utf-8")).decode("ascii")
-
     values = [str(svc.get(field) or "") for field in fields]
-    values.append("\\u001f".join(str(item or "") for item in depends_on if str(item or "")))
+    runtime_config_content = str(svc.get("runtimeConfigFileContent") or "")
+    values.append(base64.b64encode(runtime_config_content.encode("utf-8")).decode("ascii"))
+    values.append("\\u001f".join(str(i or "") for i in depends_on if str(i or "")))
     values.append(relationships_token)
-    print("\\t".join(value.replace("\\t", " ").replace("\\n", " ") for value in values))
+    print("\\t".join(v.replace("\\t", " ").replace("\\n", " ") for v in values))
 PY""",
             returnStdout: true
         ).trim()
 
-        if (!output) {
-            return []
-        }
+        if (!output) { return [] }
 
         output.readLines().collect { line ->
-            def columns = line.split('\\t', -1)
+            def c = line.split('\\t', -1)
             [
-                name              : columns[0],
-                repoUrl           : columns[1],
-                branch            : columns[2],
-                repoCredentialsId : columns[3],
-                framework         : columns[4],
-                appPort           : columns[5],
-                imageTag          : columns[6],
-                envJson           : columns[7],
-                serviceType       : columns[8],
-                customDomain      : columns[9],
-                platformHostOverride: columns[10],
-                imageRepository   : columns[11],
-                commitSha         : columns[12],
-                mergedEnvJson     : columns[13],
-                exposePublic      : columns[14]?.toBoolean(),
-                primaryPublic     : columns[15]?.toBoolean(),
-                dependsOn         : columns[16] ? columns[16].split('\u001f').findAll { it } : [],
-                relationshipsToken: columns[17]
+                name                : c[0],
+                repoUrl             : c[1],
+                branch              : c[2],
+                repoCredentialsId   : c[3],
+                framework           : c[4],
+                appPort             : c[5],
+                imageTag            : c[6],
+                envJson             : c[7],
+                serviceType         : c[8],
+                customDomain        : c[9],
+                platformHostOverride: c[10],
+                imageRepository     : c[11],
+                commitSha           : c[12],
+                mergedEnvJson       : c[13],
+                runtimeConfigFileName: c[14],
+                runtimeConfigFileContent: c[15] ? new String(c[15].decodeBase64(), 'UTF-8') : '',
+                exposePublic        : c[16]?.toBoolean(),
+                primaryPublic       : c[17]?.toBoolean(),
+                dependsOn           : c[18] ? c[18].split('\u001f').findAll { it } : [],
+                relationshipsToken  : c[19]
             ]
         }
     } finally {
@@ -773,31 +706,22 @@ PY""",
 }
 
 def parseServiceSelection(String rawValue) {
-    if (!rawValue?.trim()) {
-        return [] as Set
-    }
-
-    rawValue
-        .split(',')
-        .collect { it?.toString()?.trim() }
-        .findAll { it }
-        .toSet()
+    if (!rawValue?.trim()) { return [] as Set }
+    rawValue.split(',').collect { it?.toString()?.trim() }.findAll { it }.toSet()
 }
 
-def mergeEnvAndRelationships(String envJson, String relationshipsToken) {
-    def envTempFile = '.jenkins-env.json'
+// index parameter makes the temp file unique — safe to call from parallel branches
+def mergeEnvAndRelationships(String envJson, String relationshipsToken, int index = 0) {
+    def envTempFile = ".jenkins-env-${index}.json"
     writeFile file: envTempFile, text: envJson ?: '[]'
 
     try {
         sh(
             script: """python3 - '${envTempFile}' '${relationshipsToken ?: ''}' <<'PY'
-import base64
-import json
-import sys
+import base64, json, sys
 
-with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-    user_vars = json.load(handle)
-
+with open(sys.argv[1], 'r', encoding='utf-8') as h:
+    user_vars = json.load(h)
 if not isinstance(user_vars, list):
     user_vars = []
 
@@ -813,13 +737,11 @@ merged = {}
 for item in user_vars:
     if isinstance(item, dict) and item.get("name"):
         merged[str(item["name"])] = item.get("value", "")
-
 for item in relationships:
     if isinstance(item, dict) and item.get("name"):
         merged[str(item["name"])] = item.get("value", "")
 
-result = [{"name": key, "value": value} for key, value in merged.items()]
-print(json.dumps(result, separators=(",", ":")))
+print(json.dumps([{"name": k, "value": v} for k, v in merged.items()], separators=(",", ":")))
 PY""",
             returnStdout: true
         ).trim()
@@ -828,55 +750,48 @@ PY""",
     }
 }
 
-def resolveRelationshipsToken(def svc, List services, String workspaceId, String stackName) {
-    def servicesTempFile = '.jenkins-relationships-services.tsv'
-    def directRelationshipsTempFile = '.jenkins-relationships-direct.tsv'
-    def normalizeField = { value ->
-        String.valueOf(value ?: '')
-            .replace('\r', ' ')
-            .replace('\n', ' ')
-            .replace('\t', ' ')
-            .trim()
+// index parameter makes temp files unique — safe to call from parallel branches
+def resolveRelationshipsToken(def svc, List services, String workspaceId, String stackName, int index = 0) {
+    def servicesTempFile      = ".jenkins-relationships-services-${index}.tsv"
+    def directRelsTempFile    = ".jenkins-relationships-direct-${index}.tsv"
+    def normalizeField        = { value ->
+        String.valueOf(value ?: '').replace('\r', ' ').replace('\n', ' ').replace('\t', ' ').trim()
     }
-    def serviceLines = services.collect { candidate ->
-        def logicalName = normalizeField(candidate.name)
+
+    def serviceLines = services.collect { c ->
+        def logicalName = normalizeField(c.name)
         def runtimeName = buildRuntimeServiceName(stackName, logicalName)
-        "${logicalName}\t${normalizeField(runtimeName)}\t${normalizeField(candidate.appPort)}"
+        "${logicalName}\t${normalizeField(runtimeName)}\t${normalizeField(c.appPort)}"
     }
     writeFile file: servicesTempFile, text: serviceLines.join('\n')
 
-    def relationshipsToken = String.valueOf(svc?.relationshipsToken ?: '').trim()
-    def directRelationshipLines = []
+    def relationshipsToken  = String.valueOf(svc?.relationshipsToken ?: '').trim()
+    def directRelLines      = []
     if (!relationshipsToken) {
-        def rawRelationships = svc?.relationships
-        if (rawRelationships instanceof List) {
-            rawRelationships.each { item ->
+        def rawRels = svc?.relationships
+        if (rawRels instanceof List) {
+            rawRels.each { item ->
                 if (item instanceof Map) {
-                    def name = normalizeField(item.name)
-                    def value = normalizeField(item.value)
-                    if (name && value) {
-                        directRelationshipLines << "${name}\t${value}"
-                    }
+                    def n = normalizeField(item.name)
+                    def v = normalizeField(item.value)
+                    if (n && v) { directRelLines << "${n}\t${v}" }
                 }
             }
         }
     }
-    writeFile file: directRelationshipsTempFile, text: directRelationshipLines.join('\n')
+    writeFile file: directRelsTempFile, text: directRelLines.join('\n')
 
     try {
         return sh(
-            script: """python3 - '${servicesTempFile}' '${directRelationshipsTempFile}' '${workspaceId ?: ''}' '${relationshipsToken}' <<'PY'
-import base64
-import json
-import sys
+            script: """python3 - '${servicesTempFile}' '${directRelsTempFile}' '${workspaceId ?: ''}' '${relationshipsToken}' <<'PY'
+import base64, json, sys
 
-with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-    service_lines = handle.read().splitlines()
+with open(sys.argv[1], 'r', encoding='utf-8') as h:
+    service_lines = h.read().splitlines()
+with open(sys.argv[2], 'r', encoding='utf-8') as h:
+    relationship_lines = h.read().splitlines()
 
-with open(sys.argv[2], 'r', encoding='utf-8') as handle:
-    relationship_lines = handle.read().splitlines()
-
-workspace_id = (sys.argv[3] or '').strip()
+workspace_id        = (sys.argv[3] or '').strip()
 relationships_token = (sys.argv[4] or '').strip()
 
 def load_relationships(token, lines):
@@ -886,80 +801,63 @@ def load_relationships(token, lines):
             return decoded if isinstance(decoded, list) else []
         except Exception:
             return []
-    relationships = []
+    result = []
     for line in lines:
         parts = line.split("\\t", 1)
-        name = parts[0].strip() if len(parts) > 0 else ""
+        name  = parts[0].strip() if len(parts) > 0 else ""
         value = parts[1].strip() if len(parts) > 1 else ""
         if name and value:
-            relationships.append({"name": name, "value": value})
-    return relationships
+            result.append({"name": name, "value": value})
+    return result
 
 def parse_port(raw):
     text = str(raw or "").strip()
-    if not text:
-        return ""
+    if not text: return ""
     try:
-        value = int(text)
-        return str(value) if value > 0 else ""
+        v = int(text)
+        return str(v) if v > 0 else ""
     except Exception:
         return ""
 
 service_index = {}
 for line in service_lines:
     parts = line.split("\\t")
-    name = parts[0].strip() if len(parts) > 0 else ""
-    runtime_name = parts[1].strip() if len(parts) > 1 else ""
-    port_raw = parts[2].strip() if len(parts) > 2 else ""
-    if not name:
-        continue
-    service_index[name] = {
-        "runtime_name": runtime_name or name,
-        "port": parse_port(port_raw),
-    }
+    name  = parts[0].strip() if len(parts) > 0 else ""
+    rname = parts[1].strip() if len(parts) > 1 else ""
+    port  = parts[2].strip() if len(parts) > 2 else ""
+    if not name: continue
+    service_index[name] = {"runtime_name": rname or name, "port": parse_port(port)}
 
-def build_internal_url(target_name, relationship_name):
+def build_internal_url(target_name, rel_name):
     target = service_index.get(target_name)
-    if not target:
-        return target_name
+    if not target: return target_name
     host = target.get("runtime_name") or target_name
     if workspace_id:
-        runtime_name = target.get("runtime_name") or target_name
-        host = f"{runtime_name}.{workspace_id}.svc"
+        host = f"{target.get('runtime_name') or target_name}.{workspace_id}.svc"
     port = target.get("port") or ""
-    base = f"http://{host}"
-    if port:
-        base = f"{base}:{port}"
-    upper_name = relationship_name.upper()
-    if upper_name == "EUREKA_URL":
+    base = f"http://{host}" + (f":{port}" if port else "")
+    if rel_name.upper() == "EUREKA_URL":
         return base.rstrip("/") + "/eureka/"
     return base.rstrip("/") + "/"
 
 resolved = []
 for item in load_relationships(relationships_token, relationship_lines):
-    if not isinstance(item, dict):
-        continue
-    name = str(item.get("name") or "").strip()
-    if not name:
-        continue
-    if name.lower() == "depends_on":
-        continue
+    if not isinstance(item, dict): continue
+    name  = str(item.get("name") or "").strip()
+    if not name or name.lower() == "depends_on": continue
     value = str(item.get("value") or "").strip()
-    if not value:
-        continue
+    if not value: continue
     if value.startswith("http://") or value.startswith("https://"):
         resolved.append({"name": name, "value": value})
-        continue
-    resolved.append({"name": name, "value": build_internal_url(value, name)})
+    else:
+        resolved.append({"name": name, "value": build_internal_url(value, name)})
 
-encoded = base64.b64encode(json.dumps(resolved, separators=(",", ":")).encode("utf-8")).decode("ascii")
-print(encoded)
+print(base64.b64encode(json.dumps(resolved, separators=(",", ":")).encode("utf-8")).decode("ascii"))
 PY""",
             returnStdout: true
         ).trim()
     } finally {
-        sh "rm -f '${servicesTempFile}'"
-        sh "rm -f '${directRelationshipsTempFile}'"
+        sh "rm -f '${servicesTempFile}' '${directRelsTempFile}'"
     }
 }
 
@@ -978,48 +876,37 @@ def servicesStateToJson(String state) {
             svc.imageRepository ?: '',
             svc.imageTag ?: '',
             svc.mergedEnvJson ?: '[]',
+            svc.runtimeConfigFileName ?: '',
+            svc.runtimeConfigFileContent ? svc.runtimeConfigFileContent.bytes.encodeBase64().toString() : '',
             svc.syncWave ?: '0',
-            (svc.exposePublic ? 'true' : 'false'),
+            (svc.exposePublic  ? 'true' : 'false'),
             (svc.primaryPublic ? 'true' : 'false')
-        ].collect { value ->
-            (value?.toString() ?: '')
-                .replace('\t', ' ')
-                .replace('\n', ' ')
-                .replace('\r', ' ')
-        }.join('\t')
+        ].collect { v -> (v?.toString() ?: '').replace('\t', ' ').replace('\n', ' ').replace('\r', ' ') }.join('\t')
     }.join('\n')
 
     try {
         return sh(
             script: """python3 - '${tempFile}' <<'PY'
-import json
-import sys
+import base64, json, sys
 
 services = []
-
-with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-    for raw_line in handle:
-        line = raw_line.rstrip('\\n')
-        if not line:
-            continue
-        columns = line.split('\\t')
-        while len(columns) < 12:
-            columns.append('')
+with open(sys.argv[1], 'r', encoding='utf-8') as h:
+    for raw in h:
+        line = raw.rstrip('\\n')
+        if not line: continue
+        c = line.split('\\t')
+        while len(c) < 14: c.append('')
         services.append({
-            "name": columns[0],
-            "framework": columns[1],
-            "appPort": columns[2],
-            "serviceType": columns[3] or "internal",
-            "customDomain": columns[4],
-            "platformHostOverride": columns[5],
-            "imageRepository": columns[6],
-            "imageTag": columns[7],
-            "envJson": columns[8] or "[]",
-            "syncWave": columns[9] or "0",
-            "exposePublic": columns[10].lower() == "true",
-            "primaryPublic": columns[11].lower() == "true",
+            "name": c[0], "framework": c[1], "appPort": c[2],
+            "serviceType": c[3] or "internal", "customDomain": c[4],
+            "platformHostOverride": c[5], "imageRepository": c[6],
+            "imageTag": c[7], "envJson": c[8] or "[]",
+            "runtimeConfigFileName": c[9],
+            "runtimeConfigFileContent": base64.b64decode(c[10]).decode("utf-8") if c[10] else "",
+            "syncWave": c[11] or "0",
+            "exposePublic":  c[12].lower() == "true",
+            "primaryPublic": c[13].lower() == "true",
         })
-
 print(json.dumps(services, separators=(",", ":")))
 PY""",
             returnStdout: true
@@ -1046,44 +933,43 @@ def encodeServicesForState(List services) {
             svc.imageRepository,
             svc.commitSha,
             svc.mergedEnvJson,
+            svc.runtimeConfigFileName,
+            svc.runtimeConfigFileContent ? svc.runtimeConfigFileContent.bytes.encodeBase64().toString() : '',
             ((svc.dependsOn ?: []).collect { it?.toString() ?: '' }.findAll { it }.join('\u001f')),
             svc.relationshipsToken,
             svc.syncWave,
-            (svc.exposePublic ? 'true' : 'false'),
+            (svc.exposePublic  ? 'true' : 'false'),
             (svc.primaryPublic ? 'true' : 'false')
         ].collect { encodeStateField(it) }.join('\t')
     }.join('\n')
 }
 
 def decodeServicesFromState(String state) {
-    if (!state?.trim()) {
-        return []
-    }
-
+    if (!state?.trim()) { return [] }
     state.readLines().findAll { it?.trim() }.collect { line ->
-        def columns = line.split('\t', -1).collect { decodeStateField(it) }
+        def c = line.split('\t', -1).collect { decodeStateField(it) }
         [
-            name              : columns.size() > 0 ? columns[0] : '',
-            repoUrl           : columns.size() > 1 ? columns[1] : '',
-            branch            : columns.size() > 2 ? columns[2] : '',
-            repoCredentialsId : columns.size() > 3 ? columns[3] : '',
-            framework         : columns.size() > 4 ? columns[4] : '',
-            appPort           : columns.size() > 5 ? columns[5] : '',
-            imageTag          : columns.size() > 6 ? columns[6] : '',
-            envJson           : columns.size() > 7 ? columns[7] : '',
-            serviceType       : columns.size() > 8 ? columns[8] : '',
-            customDomain      : columns.size() > 9 ? columns[9] : '',
-            platformHostOverride: columns.size() > 10 ? columns[10] : '',
-            imageRepository   : columns.size() > 11 ? columns[11] : '',
-            commitSha         : columns.size() > 12 ? columns[12] : '',
-            mergedEnvJson     : columns.size() > 13 ? columns[13] : '',
-            dependsOn         : (columns.size() > 14 && columns[14])
-                ? columns[14].split('\u001f').findAll { it }
-                : [],
-            relationshipsToken: columns.size() > 15 ? columns[15] : '',
-            syncWave          : columns.size() > 16 ? columns[16] : '0',
-            exposePublic      : columns.size() > 17 ? columns[17].toBoolean() : false,
-            primaryPublic     : columns.size() > 18 ? columns[18].toBoolean() : false
+            name                : c.size() > 0  ? c[0]  : '',
+            repoUrl             : c.size() > 1  ? c[1]  : '',
+            branch              : c.size() > 2  ? c[2]  : '',
+            repoCredentialsId   : c.size() > 3  ? c[3]  : '',
+            framework           : c.size() > 4  ? c[4]  : '',
+            appPort             : c.size() > 5  ? c[5]  : '',
+            imageTag            : c.size() > 6  ? c[6]  : '',
+            envJson             : c.size() > 7  ? c[7]  : '',
+            serviceType         : c.size() > 8  ? c[8]  : '',
+            customDomain        : c.size() > 9  ? c[9]  : '',
+            platformHostOverride: c.size() > 10 ? c[10] : '',
+            imageRepository     : c.size() > 11 ? c[11] : '',
+            commitSha           : c.size() > 12 ? c[12] : '',
+            mergedEnvJson       : c.size() > 13 ? c[13] : '',
+            runtimeConfigFileName: c.size() > 14 ? c[14] : '',
+            runtimeConfigFileContent: c.size() > 15 && c[15] ? new String(c[15].decodeBase64(), 'UTF-8') : '',
+            dependsOn           : (c.size() > 16 && c[16]) ? c[16].split('\u001f').findAll { it } : [],
+            relationshipsToken  : c.size() > 17 ? c[17] : '',
+            syncWave            : c.size() > 18 ? c[18] : '0',
+            exposePublic        : c.size() > 19 ? c[19].toBoolean() : false,
+            primaryPublic       : c.size() > 20 ? c[20].toBoolean() : false
         ]
     }
 }
@@ -1111,18 +997,12 @@ def slugify(String raw, int maxLen = 40) {
         .replaceAll(/^-+/, '')
         .replaceAll(/-+$/, '')
         .replaceAll(/-{2,}/, '-')
-
-    if (!normalized) {
-        normalized = 'x'
-    }
-
+    if (!normalized) { normalized = 'x' }
     normalized.take(maxLen)
 }
 
 def buildRuntimeServiceName(String stackName, String serviceName) {
-    def safeStackName = slugify(stackName ?: '', 40)
-    def safeServiceName = slugify(serviceName ?: '', 40)
-    slugify("${safeStackName}-${safeServiceName}", 63)
+    slugify("${slugify(stackName ?: '', 40)}-${slugify(serviceName ?: '', 40)}", 63)
 }
 
 def resolveRegistryContext(String rawValue) {
@@ -1134,16 +1014,11 @@ def resolveRegistryContext(String rawValue) {
     if (!normalizedRegistry) {
         error('REGISTRY_REPOSITORY is required')
     }
-
-    def registryParts = normalizedRegistry.tokenize('/')
-    if (registryParts.size() < 2) {
-        error('For private registries, REGISTRY_REPOSITORY must include registry host and project, for example "harbor.example.com/platform"')
+    def parts = normalizedRegistry.tokenize('/')
+    if (parts.size() < 2) {
+        error('REGISTRY_REPOSITORY must include registry host and project, e.g. "harbor.example.com/platform"')
     }
-
-    [
-        loginServer   : registryParts[0],
-        repositoryRoot: normalizedRegistry
-    ]
+    [loginServer: parts[0], repositoryRoot: normalizedRegistry]
 }
 
 def buildImageRepository(String repositoryRoot, String safeProjectName, String safeUserId) {
@@ -1158,7 +1033,7 @@ def resolveCommitAndFramework(def svc, String branch, String safeProjectName, in
 
     def resolvedCommitSha = ''
     def resolvedFramework = frameworkOverride
-    def resolvedBranch = branch
+    def resolvedBranch    = branch
 
     dir("service-plan/${index}-${safeProjectName}") {
         resolvedBranch = checkoutRepoWithBranchFallback(
@@ -1169,8 +1044,8 @@ def resolveCommitAndFramework(def svc, String branch, String safeProjectName, in
 
         sh '''
             if [ -d .git ]; then
-              git reset --hard >/dev/null
-              git clean -fd >/dev/null
+                git reset --hard >/dev/null
+                git clean -fd    >/dev/null
             fi
         '''
 
@@ -1187,45 +1062,28 @@ def resolveCommitAndFramework(def svc, String branch, String safeProjectName, in
         }
     }
 
-    [
-        commitSha: resolvedCommitSha,
-        framework: resolvedFramework,
-        branch   : resolvedBranch
-    ]
+    [commitSha: resolvedCommitSha, framework: resolvedFramework, branch: resolvedBranch]
 }
 
 def buildRepoBranchCandidates(String requestedBranch) {
-    def normalizedBranch = requestedBranch?.toString()?.trim()
-    if (!normalizedBranch) {
-        return ['main', 'master']
-    }
-
-    if (normalizedBranch.startsWith('refs/tags/')) {
-        return [normalizedBranch]
-    }
-
-    def candidates = [normalizedBranch]
-    if (normalizedBranch == 'main') {
-        candidates << 'master'
-    } else if (normalizedBranch == 'master') {
-        candidates << 'main'
-    }
+    def normalized = requestedBranch?.toString()?.trim()
+    if (!normalized) { return ['main', 'master'] }
+    if (normalized.startsWith('refs/tags/')) { return [normalized] }
+    def candidates = [normalized]
+    if (normalized == 'main')        { candidates << 'master' }
+    else if (normalized == 'master') { candidates << 'main' }
     return candidates.unique()
 }
 
 def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String requestedBranch) {
     def candidates = buildRepoBranchCandidates(requestedBranch)
-    def lastError = null
+    def lastError  = null
 
-    // Force-clean the workspace directory before any git operation.
-    // Uses root-capable rm to handle files written by Docker/Gradle daemons
-    // that the jenkins user cannot overwrite.
     sh '''
         if [ -d .git ]; then
             git -C . clean -fdx || true
             git -C . reset --hard || true
         fi
-        # Remove known build-tool cache dirs that cause write conflicts
         rm -rf .gradle-home .gradle .m2 target build dist node_modules || true
     '''
 
@@ -1242,48 +1100,30 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
                         refspec: "+refs/tags/${tagName}:refs/tags/${tagName}"
                     ]],
                     extensions: [
-                        [$class: 'CloneOption',
-                            shallow: true,
-                            depth: 1,
-                            noTags: false,
-                            honorRefspec: true,
-                            timeout: 60,
-                        ],
+                        [$class: 'CloneOption',   shallow: true, depth: 1, noTags: false, honorRefspec: true, timeout: 60],
                         [$class: 'CheckoutOption', timeout: 60],
                         [$class: 'CleanBeforeCheckout', deleteUntrackedNestedRepositories: true]
                     ]
                 ])
-
                 return candidate
             }
 
             checkout([
                 $class: 'GitSCM',
                 branches: [[name: "*/${candidate}"]],
-                userRemoteConfigs: [[
-                    url: repoUrl,
-                    credentialsId: credentialsId?.trim() ?: null
-                ]],
+                userRemoteConfigs: [[url: repoUrl, credentialsId: credentialsId?.trim() ?: null]],
                 extensions: [
-                    [$class: 'CloneOption',
-                        shallow: true,
-                        depth: 1,
-                        noTags: true,
-                        honorRefspec: true,
-                        timeout: 60,
-                    ],
+                    [$class: 'CloneOption',   shallow: true, depth: 1, noTags: true, honorRefspec: true, timeout: 60],
                     [$class: 'CheckoutOption', timeout: 60],
                     [$class: 'CleanBeforeCheckout', deleteUntrackedNestedRepositories: true]
                 ]
             ])
-
             return candidate
+
         } catch (Exception err) {
             lastError = err
             echo "Checkout failed for branch '${candidate}' from ${repoUrl}: ${err.getMessage()}"
-            if (!isBranchResolutionFailure(err)) {
-                throw err
-            }
+            if (!isBranchResolutionFailure(err)) { throw err }
             sh 'rm -rf .git .gradle-home .gradle || true'
         }
     }

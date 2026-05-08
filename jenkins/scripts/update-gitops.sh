@@ -139,6 +139,7 @@ create_values_file() {
   local services_json="$7"
 
   python3 - "$values_file" "$workspace_id" "$user_id" "$namespace" "$project_name" "$platform_domain" "$services_json" <<'PY'
+import base64
 import json
 import re
 import sys
@@ -243,6 +244,11 @@ for svc in services:
     platform_host_override = str(svc.get("platformHostOverride") or "").strip()
     host = custom_domain or platform_host_override or f"{slugify(project_name, 24)}-{slugify(name, 24)}-{workspace_id}.{platform_domain}"
     env_json = str(svc.get("envJson") or "[]").strip() or "[]"
+    runtime_config_file_name = str(svc.get("runtimeConfigFileName") or "").strip()
+    runtime_config_file_content_b64 = str(svc.get("runtimeConfigFileContentBase64") or "").strip()
+    runtime_config_file_content = str(svc.get("runtimeConfigFileContent") or "")
+    if runtime_config_file_content_b64:
+        runtime_config_file_content = base64.b64decode(runtime_config_file_content_b64).decode("utf-8")
     sync_wave = int(svc.get("syncWave") or 0)
     p_mode = probe_mode(framework)
     startup_enabled = startup_probe_enabled(framework)
@@ -315,6 +321,16 @@ for svc in services:
         "    env: []",
         f"    envJson: {json.dumps(env_json)}",
     ])
+
+    if runtime_config_file_name and runtime_config_file_content.strip():
+        lines.extend([
+            f'    runtimeConfigFileName: "{runtime_config_file_name}"',
+            "    runtimeConfigFileContent: |",
+        ])
+        lines.extend(
+            [f"      {line}" if line else "      " for line in runtime_config_file_content.splitlines()]
+            or ["      "]
+        )
 
 with open(values_file, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines) + "\n")
@@ -509,6 +525,8 @@ print(json.dumps([{
     "primaryPublic": sys.argv[4] in {"gateway", "frontend"},
     "customDomain": sys.argv[5],
     "envJson": sys.argv[6] or "[]",
+    "runtimeConfigFileName": "",
+    "runtimeConfigFileContentBase64": "",
     "imageRepository": sys.argv[7],
     "imageTag": sys.argv[8],
     "syncWave": sys.argv[9] or "0",

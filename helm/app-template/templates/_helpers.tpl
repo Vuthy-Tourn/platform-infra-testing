@@ -33,3 +33,15 @@ platform.devops/service-type: {{ default "internal" $service.serviceType | quote
 {{- define "tenant-app.syncWave" -}}
 {{- default 0 .service.syncWave | toString -}}
 {{- end -}}
+
+{{- define "tenant-app.runtimeConfigMapName" -}}
+{{- printf "%s-runtime-config" (include "tenant-app.serviceName" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "tenant-app.runtimeEnvConfigMapName" -}}
+{{- printf "%s-runtime-env" (include "tenant-app.serviceName" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "tenant-app.runtimeSecretName" -}}
+{{- printf "%s-runtime-secret" (include "tenant-app.serviceName" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}

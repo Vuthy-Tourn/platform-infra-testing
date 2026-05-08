@@ -7,36 +7,36 @@ pipeline {
         timeout(time: 20, unit: 'MINUTES')
         timestamps()
         buildDiscarder(logRotator(numToKeepStr: '50'))
-        // ansiColor('xterm')
     }
 
     parameters {
-        string(name: 'REPO_URL', defaultValue: '', description: 'Git repository URL from user (GitHub/GitLab)')
-        string(name: 'BRANCH', defaultValue: 'main', description: 'Git branch to build')
-        string(name: 'USER_ID', defaultValue: '', description: 'Tenant user id')
-        string(name: 'WORKSPACE_ID', defaultValue: '', description: 'Workspace id/slug for GitOps path partitioning and Kubernetes namespace')
-        string(name: 'PROJECT_NAME', defaultValue: '', description: 'Project slug')
-        string(name: 'APP_NAME', defaultValue: '', description: 'Legacy alias for PROJECT_NAME')
-        string(name: 'IMAGE_TAG', defaultValue: '', description: 'Optional image tag provided by backend (deploy or rollback)')
-        string(name: 'FRAMEWORK', defaultValue: '', description: 'Optional framework override provided by backend')
-        string(name: 'REPO_CREDENTIALS_ID', defaultValue: '', description: 'Optional Jenkins credential id for private user repositories')
-        string(name: 'SONARQUBE_SERVER_NAME', defaultValue: 'sonarqube', description: 'Jenkins SonarQube server configuration name')
-        string(name: 'SONARQUBE_SCANNER_TOOL', defaultValue: '', description: 'Optional Jenkins SonarScanner tool name; empty uses sonar-scanner from PATH')
+        string(name: 'REPO_URL',                  defaultValue: '', description: 'Git repository URL from user (GitHub/GitLab)')
+        string(name: 'BRANCH',                    defaultValue: 'main', description: 'Git branch to build')
+        string(name: 'USER_ID',                   defaultValue: '', description: 'Tenant user id')
+        string(name: 'WORKSPACE_ID',              defaultValue: '', description: 'Workspace id/slug for GitOps path partitioning and Kubernetes namespace')
+        string(name: 'PROJECT_NAME',              defaultValue: '', description: 'Project slug')
+        string(name: 'APP_NAME',                  defaultValue: '', description: 'Legacy alias for PROJECT_NAME')
+        string(name: 'IMAGE_TAG',                 defaultValue: '', description: 'Optional image tag provided by backend (deploy or rollback)')
+        string(name: 'FRAMEWORK',                 defaultValue: '', description: 'Optional framework override provided by backend')
+        string(name: 'REPO_CREDENTIALS_ID',       defaultValue: '', description: 'Optional Jenkins credential id for private user repositories')
+        string(name: 'SONARQUBE_SERVER_NAME',     defaultValue: 'sonarqube', description: 'Jenkins SonarQube server configuration name')
+        string(name: 'SONARQUBE_SCANNER_TOOL',    defaultValue: '', description: 'Optional Jenkins SonarScanner tool name; empty uses sonar-scanner from PATH')
         string(name: 'SONARQUBE_JDK_TOOL_PREFIX', defaultValue: 'jdk', description: 'Jenkins JDK tool name prefix used for Java SonarQube analysis (example: jdk -> jdk21)')
-        booleanParam(name: 'ENABLE_SONARQUBE_SCAN', defaultValue: false, description: 'Run SonarQube source analysis')
+        booleanParam(name: 'ENABLE_SONARQUBE_SCAN',         defaultValue: false, description: 'Run SonarQube source analysis')
         booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', defaultValue: false, description: 'Wait for SonarQube quality gate before build')
-        booleanParam(name: 'ENABLE_TRIVY_SCAN', defaultValue: true, description: 'Run local Trivy image scan')
-        booleanParam(name: 'ROLLBACK_MODE', defaultValue: false, description: 'Skip build/scan/push and update GitOps with a saved image tag')
+        booleanParam(name: 'ENABLE_TRIVY_SCAN',             defaultValue: true,  description: 'Run local Trivy image scan')
+        booleanParam(name: 'ROLLBACK_MODE',                 defaultValue: false, description: 'Skip build/scan/push and update GitOps with a saved image tag')
     }
 
     environment {
         INFRA_REPO_URL      = credentials('infra-repo-url-micro')
         REGISTRY_REPOSITORY = credentials('register-url-micro')
-        // Enable BuildKit for layer caching
         DOCKER_BUILDKIT     = '1'
     }
 
     stages {
+
+        // ──────────────────────────────────────────────────────────────────────
         stage('Validate input') {
             agent { label 'master' }
             steps {
@@ -47,14 +47,17 @@ pipeline {
                     if (!params.USER_ID?.trim()) {
                         error('USER_ID is required')
                     }
-                    env.EFFECTIVE_WORKSPACE_ID = params.WORKSPACE_ID?.trim() ? params.WORKSPACE_ID.trim() : params.USER_ID.trim()
+
+                    env.EFFECTIVE_WORKSPACE_ID = params.WORKSPACE_ID?.trim() ?: params.USER_ID.trim()
                     if (!env.EFFECTIVE_WORKSPACE_ID) {
                         error('WORKSPACE_ID is required (or falls back to USER_ID)')
                     }
-                    env.EFFECTIVE_PROJECT_NAME = params.PROJECT_NAME?.trim() ? params.PROJECT_NAME.trim() : params.APP_NAME?.trim()
+
+                    env.EFFECTIVE_PROJECT_NAME = params.PROJECT_NAME?.trim() ?: params.APP_NAME?.trim()
                     if (!env.EFFECTIVE_PROJECT_NAME) {
                         error('PROJECT_NAME (or APP_NAME) is required')
                     }
+
                     if (params.ROLLBACK_MODE) {
                         if (!params.FRAMEWORK?.trim()) {
                             error('FRAMEWORK is required in rollback mode')
@@ -68,12 +71,10 @@ pipeline {
                         .trim()
                         .replaceFirst(/^https?:\/\//, '')
                         .replaceAll(/\/+$/, '')
-                    if (!normalizedRegistry) {
+
+                    if (!normalizedRegistry || !normalizedRegistry.contains('/')) {
                         error('REGISTRY_REPOSITORY must include registry host and Harbor project (example: harbor.devith.it.com/microservices-deployment)')
                     }
-
-                    echo "WORKSPACE_ID=${env.EFFECTIVE_WORKSPACE_ID}"
-                    echo "Deployment namespace (from workspace): ${env.SAFE_WORKSPACE_ID}"
 
                     env.SAFE_USER_ID = sh(
                         script: '''echo "$USER_ID" | tr '[:upper:]' '[:lower:]' | sed -E "s/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g" | cut -c1-30''',
@@ -88,15 +89,11 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    if (!normalizedRegistry.contains('/')) {
-                        error('REGISTRY_REPOSITORY must include registry host and Harbor project (example: harbor.devith.it.com/microservices-deployment)')
-                    }
-
                     env.NORMALIZED_REGISTRY_REPOSITORY = normalizedRegistry
-                    env.REGISTRY_LOGIN_SERVER = normalizedRegistry.tokenize('/')[0]
-                    env.IMAGE_REPOSITORY = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_USER_ID}/${env.SAFE_PROJECT_NAME}"
-                    // Stable "latest" tag used as cache source across builds
-                    env.IMAGE_CACHE_REF = "${env.IMAGE_REPOSITORY}:latest"
+                    env.REGISTRY_LOGIN_SERVER          = normalizedRegistry.tokenize('/')[0]
+                    env.IMAGE_REPOSITORY               = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_USER_ID}/${env.SAFE_PROJECT_NAME}"
+                    env.IMAGE_CACHE_REF                = "${env.IMAGE_REPOSITORY}:latest"
+
                     if (params.IMAGE_TAG?.trim()) {
                         env.IMAGE_TAG = params.IMAGE_TAG.trim()
                     }
@@ -109,10 +106,14 @@ pipeline {
                     if (params.ROLLBACK_MODE) {
                         env.APP_COMMIT_SHA = "rollback-${env.IMAGE_TAG}"
                     }
+
+                    echo "WORKSPACE_ID=${env.EFFECTIVE_WORKSPACE_ID}"
+                    echo "Deployment namespace: ${env.SAFE_WORKSPACE_ID}"
                 }
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
         stage('Checkout infra') {
             agent { label 'master' }
             steps {
@@ -126,11 +127,11 @@ pipeline {
                         ]]
                     ])
                 }
-                // Stash infra so later stages don't need to re-checkout
                 stash name: 'platform-infra-src', includes: 'platform-infra/**'
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
         stage('Checkout user repository') {
             when {
                 expression { return !params.ROLLBACK_MODE }
@@ -145,7 +146,7 @@ pipeline {
                             try {
                                 env.NORMALIZED_REPO_URL = java.net.URLDecoder.decode(params.REPO_URL, 'UTF-8')
                             } catch (Exception ignored) {
-                                echo 'Could not decode REPO_URL, using original value.'
+                                echo 'Could not decode REPO_URL — using original value.'
                             }
                         }
 
@@ -161,15 +162,15 @@ pipeline {
                         }
                         env.IMAGE_FULL = "${env.IMAGE_REPOSITORY}:${env.IMAGE_TAG}"
 
-                        echo "Resolved application branch: ${env.RESOLVED_APP_BRANCH}"
-                        echo "Resolved image tag: ${env.IMAGE_TAG}"
+                        echo "Resolved branch : ${env.RESOLVED_APP_BRANCH}"
+                        echo "Resolved image  : ${env.IMAGE_FULL}"
                     }
                 }
-                // Stash user app so Build Image doesn't need to re-checkout
                 stash name: 'user-app-src', includes: 'user-app/**'
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
         stage('Detect framework') {
             when {
                 expression { return !params.ROLLBACK_MODE }
@@ -182,27 +183,25 @@ pipeline {
                             script: '''
                                 set -e
                                 for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
-                                    if [ -f "$d/detect-framework.sh" ]; then
-                                        echo "$d"
-                                        exit 0
-                                    fi
+                                    if [ -f "$d/detect-framework.sh" ]; then echo "$d"; exit 0; fi
                                 done
-                                echo "ERROR: detect-framework.sh not found in expected infra directories." >&2
-                                ls -la "$WORKSPACE" >&2 || true
-                                exit 1
+                                echo "ERROR: detect-framework.sh not found." >&2; exit 1
                             ''',
                             returnStdout: true
                         ).trim()
+
                         env.FRAMEWORK = sh(
                             script: "bash '${scriptsDir}/detect-framework.sh'",
                             returnStdout: true
                         ).trim()
+
                         echo "Detected framework: ${env.FRAMEWORK}"
                     }
                 }
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
         stage('Detect Java runtime') {
             when {
                 expression { return !params.ROLLBACK_MODE && params.ENABLE_SONARQUBE_SCAN }
@@ -215,18 +214,16 @@ pipeline {
                             script: '''
                                 set -e
                                 for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
-                                    if [ -f "$d/detect-java-version.sh" ]; then
-                                        echo "$d"
-                                        exit 0
-                                    fi
+                                    if [ -f "$d/detect-java-version.sh" ]; then echo "$d"; exit 0; fi
                                 done
                                 exit 0
                             ''',
                             returnStdout: true
                         ).trim()
+
                         if (!scriptsDir) {
                             env.JAVA_TOOLCHAIN_VERSION = ''
-                            echo 'Java version detection script not found. SonarQube analysis will use the node default Java runtime.'
+                            echo 'Java version detection script not found — using node default Java runtime.'
                             return
                         }
 
@@ -235,16 +232,15 @@ pipeline {
                             returnStdout: true
                         ).trim()
 
-                        if (env.JAVA_TOOLCHAIN_VERSION) {
-                            echo "Detected Java runtime requirement: ${env.JAVA_TOOLCHAIN_VERSION}"
-                        } else {
-                            echo 'No explicit Java runtime requirement detected. SonarQube analysis will use the node default Java runtime.'
-                        }
+                        echo env.JAVA_TOOLCHAIN_VERSION
+                            ? "Detected Java runtime requirement: ${env.JAVA_TOOLCHAIN_VERSION}"
+                            : 'No explicit Java runtime requirement — using node default.'
                     }
                 }
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
         stage('SonarQube Analysis') {
             when {
                 expression { return !params.ROLLBACK_MODE && params.ENABLE_SONARQUBE_SCAN }
@@ -255,38 +251,32 @@ pipeline {
                     script {
                         def sonarWork = {
                             a8sSonarScan(
-                                server: params.SONARQUBE_SERVER_NAME?.trim() ?: 'sonarqube',
-                                scannerTool: params.SONARQUBE_SCANNER_TOOL?.trim(),
-                                projectKey: "${env.SAFE_WORKSPACE_ID}-${env.SAFE_PROJECT_NAME}",
-                                projectName: env.EFFECTIVE_PROJECT_NAME,
+                                server       : params.SONARQUBE_SERVER_NAME?.trim() ?: 'sonarqube',
+                                scannerTool  : params.SONARQUBE_SCANNER_TOOL?.trim(),
+                                projectKey   : "${env.SAFE_WORKSPACE_ID}-${env.SAFE_PROJECT_NAME}",
+                                projectName  : env.EFFECTIVE_PROJECT_NAME,
                                 projectVersion: env.APP_COMMIT_SHA,
-                                sources: '.',
-                                exclusions: '**/node_modules/**,**/.next/**,**/dist/**,**/build/**,**/target/**,**/vendor/**,**/.git/**'
+                                sources      : '.',
+                                exclusions   : '**/node_modules/**,**/.next/**,**/dist/**,**/build/**,**/target/**,**/vendor/**,**/.git/**'
                             )
                         }
 
                         if (env.JAVA_TOOLCHAIN_VERSION?.trim()) {
                             def jdkPrefix = params.SONARQUBE_JDK_TOOL_PREFIX?.trim() ?: 'jdk'
-                            def toolName = "${jdkPrefix}${env.JAVA_TOOLCHAIN_VERSION.trim()}"
+                            def toolName  = "${jdkPrefix}${env.JAVA_TOOLCHAIN_VERSION.trim()}"
                             def javaHome
                             try {
                                 javaHome = tool name: toolName, type: 'hudson.model.JDK'
                             } catch (Exception ex) {
-                                error("Java ${env.JAVA_TOOLCHAIN_VERSION} is required for SonarQube analysis, but Jenkins JDK tool '${toolName}' is not configured on this node.")
+                                error("Java ${env.JAVA_TOOLCHAIN_VERSION} required for SonarQube but JDK tool '${toolName}' is not configured on this node.")
                             }
-
                             withEnv([
                                 "JAVA_HOME=${javaHome}",
                                 "PATH=${javaHome}/bin:${env.PATH}",
                                 "ORG_GRADLE_JAVA_HOME=${javaHome}",
                                 "ORG_GRADLE_JAVA_INSTALLATIONS_PATHS=${javaHome}"
                             ]) {
-                                sh '''
-                                    java -version
-                                    if command -v javac >/dev/null 2>&1; then
-                                      javac -version
-                                    fi
-                                '''
+                                sh 'java -version; command -v javac >/dev/null 2>&1 && javac -version || true'
                                 sonarWork()
                             }
                         } else {
@@ -297,6 +287,7 @@ pipeline {
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
         stage('SonarQube Quality Gate') {
             when {
                 expression {
@@ -311,27 +302,26 @@ pipeline {
             }
         }
 
-        stage('Build Image') {
+        // ──────────────────────────────────────────────────────────────────────
+        // Build, scan, and push all happen on the same istad agent so the image
+        // stays in the local Docker daemon — no docker save / stash / docker load
+        // round-trip needed.
+        stage('Build → Scan → Push') {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
             agent { label 'istad' }
             steps {
                 script {
-                    // Clear restored directories first so unstash cannot leave behind
-                    // source files from a previous service build on the same workspace.
-                    dir('platform-infra') {
-                        deleteDir()
-                    }
-                    dir('user-app') {
-                        deleteDir()
-                    }
+                    // Fresh workspace: clear any leftovers from a previous run of
+                    // this job on the same persistent workspace directory.
+                    dir('platform-infra') { deleteDir() }
+                    dir('user-app')       { deleteDir() }
 
-                    // Restore from stash — no re-checkout needed
                     unstash 'platform-infra-src'
                     unstash 'user-app-src'
 
-                    // Generate Dockerfile if the user didn't provide one
+                    // ── Generate Dockerfile ───────────────────────────────────
                     dir('user-app') {
                         sh '''
                             SCRIPTS_DIR=""
@@ -342,20 +332,21 @@ pipeline {
                                 fi
                             done
                             if [ -z "$SCRIPTS_DIR" ]; then
-                                echo "ERROR: generate-dockerfile.sh not found in expected infra directories."
+                                echo "ERROR: generate-dockerfile.sh not found."
                                 ls -la "$WORKSPACE" || true
                                 exit 1
                             fi
 
                             if [ -f Dockerfile ]; then
-                                echo "Using user-provided Dockerfile."
+                                echo "[dockerfile] Using user-provided Dockerfile."
                             else
-                                echo "Generating Dockerfile from platform template for ${FRAMEWORK}."
+                                echo "[dockerfile] Generating from platform template for ${FRAMEWORK}."
                                 bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
                             fi
                         '''
                     }
 
+                    // ── Registry login (once) ─────────────────────────────────
                     withCredentials([usernamePassword(
                         credentialsId: 'registry-credentials',
                         usernameVariable: 'REGISTRY_USERNAME',
@@ -366,118 +357,81 @@ pipeline {
                             echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
                                 -u "${REGISTRY_USERNAME}" --password-stdin
                         '''
-                    }
 
-                    dir('user-app') {
-                        // Only pass --cache-from if this service's own :latest pulled successfully.
-                        // If the pull fails (first build, prior build failed before push, or a
-                        // different service's image is tagged :latest) we build from scratch —
-                        // prevents stale/wrong layers from poisoning the build.
-                        sh '''
-                            CACHE_FROM_ARG=""
-                            CACHE_POLICY_ARG="--no-cache"
-                            echo "[cache] Attempting to pull cache image ${IMAGE_CACHE_REF}"
-                            if docker pull "${IMAGE_CACHE_REF}" > /dev/null 2>&1; then
-                                CACHE_FROM_ARG="--cache-from ${IMAGE_CACHE_REF}"
-                                CACHE_POLICY_ARG=""
-                                echo "[cache] Cache image pulled — layers will be reused"
-                            else
-                                echo "[cache] No cache image found — forcing a clean build to avoid stale local layers"
-                            fi
+                        // ── Build ─────────────────────────────────────────────
+                        dir('user-app') {
+                            sh '''
+                                CACHE_FROM_ARG=""
+                                CACHE_POLICY_ARG="--no-cache"
 
-                            echo "[build] Starting Docker build for ${IMAGE_FULL}"
-                            docker build \
-                                ${CACHE_POLICY_ARG} \
-                                ${CACHE_FROM_ARG} \
-                                --build-arg BUILDKIT_INLINE_CACHE=1 \
-                                -t "${IMAGE_FULL}" \
-                                -t "${IMAGE_CACHE_REF}" \
-                                .
-                            echo "[build] Docker build completed"
+                                echo "[cache] Attempting to pull ${IMAGE_CACHE_REF}"
+                                if docker pull "${IMAGE_CACHE_REF}" > /dev/null 2>&1; then
+                                    CACHE_FROM_ARG="--cache-from ${IMAGE_CACHE_REF}"
+                                    CACHE_POLICY_ARG=""
+                                    echo "[cache] Cache hit — layers will be reused"
+                                else
+                                    echo "[cache] No cache image — building from scratch"
+                                fi
 
-                            echo "[build] Exporting image bundle for ${IMAGE_FULL}"
-                            docker save "${IMAGE_FULL}" -o image.tar
-                        '''
-                    }
+                                echo "[build] Building ${IMAGE_FULL}"
+                                docker build \
+                                    ${CACHE_POLICY_ARG} \
+                                    ${CACHE_FROM_ARG} \
+                                    --build-arg BUILDKIT_INLINE_CACHE=1 \
+                                    -t "${IMAGE_FULL}" \
+                                    -t "${IMAGE_CACHE_REF}" \
+                                    .
+                                echo "[build] Docker build completed"
+                            '''
+                        }
 
-                    stash name: 'built-image-tar', includes: 'user-app/image.tar'
-                }
-            }
-        }
-
-        stage('Scan → Push Image') {
-            when {
-                expression { return !params.ROLLBACK_MODE }
-            }
-            agent { label 'istad' }
-            steps {
-                unstash 'built-image-tar'
-                withCredentials([usernamePassword(
-                    credentialsId: 'registry-credentials',
-                    usernameVariable: 'REGISTRY_USERNAME',
-                    passwordVariable: 'REGISTRY_PASSWORD'
-                )]) {
-                    sh '''
-                        echo "[scan] Loading built image bundle on the Trivy node"
-                        docker load -i user-app/image.tar
-
-                        echo "[scan] Re-tagging loaded image for cache push"
-                        docker tag "${IMAGE_FULL}" "${IMAGE_CACHE_REF}"
-
-                        echo "[scan] Logging in to ${REGISTRY_LOGIN_SERVER} on the Trivy node"
-                        echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
-                            -u "${REGISTRY_USERNAME}" --password-stdin
-                    '''
-
-                    script {
-                        if (params.ENABLE_TRIVY_SCAN) {
-                            def reportPath = '/home/enz/trivy/reports/trivy-report.json'
-                            withEnv([
-                                "FULL_IMAGE=${env.IMAGE_FULL}",
-                                'TRIVY_PATH=/home/enz/trivy/docker-compose.yml'
-                            ]) {
-                                echo "[scan] Starting shared-library Trivy scan for ${env.IMAGE_FULL}"
+                        // ── Scan ──────────────────────────────────────────────
+                        script {
+                            if (params.ENABLE_TRIVY_SCAN) {
+                                def reportPath = '/home/enz/trivy/reports/trivy-report.json'
+                                echo "[scan] Starting Trivy scan for ${env.IMAGE_FULL}"
                                 def findingCount = trivyScan(
-                                    fullImage: env.IMAGE_FULL,
-                                    trivyPath: '/home/enz/trivy/docker-compose.yml',
-                                    reportPath: reportPath,
+                                    fullImage   : env.IMAGE_FULL,
+                                    trivyPath   : '/home/enz/trivy/docker-compose.yml',
+                                    reportPath  : reportPath,
                                     gateSeverity: 'HIGH,CRITICAL'
                                 )
-                                echo "[scan] Shared-library Trivy report completed with ${findingCount} HIGH/CRITICAL match(es)"
-                                echo "[scan] Uploading Trivy report to DefectDojo"
+                                echo "[scan] ${findingCount} HIGH/CRITICAL finding(s)"
+
+                                echo "[scan] Uploading report to DefectDojo"
                                 uploadDefectDojo(
-                                    defectdojoUrl: 'https://defectdojo.devith.it.com',
+                                    defectdojoUrl         : 'https://defectdojo.devith.it.com',
                                     defectdojoCredentialId: 'DEFECTDOJO',
-                                    reportPath: reportPath,
-                                    productTypeName: 'Web Applications',
-                                    productName: env.EFFECTIVE_PROJECT_NAME,
-                                    engagementName: "Jenkins-${env.BUILD_NUMBER}",
-                                    testTitle: "Trivy Image Scan - ${env.IMAGE_TAG}"
+                                    reportPath            : reportPath,
+                                    productTypeName       : 'Web Applications',
+                                    productName           : env.EFFECTIVE_PROJECT_NAME,
+                                    engagementName        : "Jenkins-${env.BUILD_NUMBER}",
+                                    testTitle             : "Trivy Image Scan - ${env.IMAGE_TAG}"
                                 )
                                 echo "[scan] DefectDojo upload completed"
                                 securityGate(severity: 'CRITICAL')
+                            } else {
+                                echo '[scan] ENABLE_TRIVY_SCAN=false — skipping.'
                             }
-                        } else {
-                            echo "[scan] ENABLE_TRIVY_SCAN=false, skipping scan."
                         }
+
+                        // ── Push ──────────────────────────────────────────────
+                        sh '''
+                            echo "[push] Pushing versioned image ${IMAGE_FULL}"
+                            docker push "${IMAGE_FULL}"
+
+                            echo "[push] Pushing cache tag ${IMAGE_CACHE_REF}"
+                            docker push "${IMAGE_CACHE_REF}"
+
+                            echo "[push] Done"
+                        '''
                     }
-
-                    sh '''
-                        echo "[push] Pushing versioned image ${IMAGE_FULL}"
-                        docker push "${IMAGE_FULL}"
-
-                        echo "[push] Pushing cache tag ${IMAGE_CACHE_REF}"
-                        docker push "${IMAGE_CACHE_REF}"
-
-                        echo "[push] Image push completed"
-                    '''
                 }
             }
             post {
                 always {
                     sh '''
-                        rm -f user-app/image.tar || true
-                        docker rmi "${IMAGE_FULL}" || true
+                        docker rmi "${IMAGE_FULL}" "${IMAGE_CACHE_REF}" || true
                         docker image prune -f || true
                     '''
                 }
@@ -488,52 +442,44 @@ pipeline {
 
     post {
         success {
-            echo "Deployment requested successfully for ${env.EFFECTIVE_PROJECT_NAME}."
-            echo "Image: ${env.IMAGE_FULL}"
+            echo "Build succeeded for ${env.EFFECTIVE_PROJECT_NAME} — image: ${env.IMAGE_FULL}"
         }
         failure {
-            echo "Deployment failed. Check stage logs for details."
+            echo "Build failed for ${env.EFFECTIVE_PROJECT_NAME}. Check stage logs."
         }
         always {
             script {
-                echo 'Keeping workspace on disk to allow Git and build cache reuse between runs.'
+                echo 'Workspace kept on disk for Git and build-cache reuse.'
             }
         }
     }
 }
 
+// ─── Helper functions ─────────────────────────────────────────────────────────
+
 def buildRepoBranchCandidates(String requestedBranch) {
-    def normalizedBranch = requestedBranch?.toString()?.trim()
-    if (!normalizedBranch) {
+    def normalized = requestedBranch?.toString()?.trim()
+    if (!normalized) {
         return ['main', 'master']
     }
-
-    if (normalizedBranch.startsWith('refs/tags/')) {
-        return [normalizedBranch]
+    if (normalized.startsWith('refs/tags/')) {
+        return [normalized]
     }
-
-    def candidates = [normalizedBranch]
-    if (normalizedBranch == 'main') {
-        candidates << 'master'
-    } else if (normalizedBranch == 'master') {
-        candidates << 'main'
-    }
+    def candidates = [normalized]
+    if (normalized == 'main')        { candidates << 'master' }
+    else if (normalized == 'master') { candidates << 'main' }
     return candidates.unique()
 }
 
 def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String requestedBranch) {
     def candidates = buildRepoBranchCandidates(requestedBranch)
-    def lastError = null
+    def lastError  = null
 
-    // Force-clean the workspace directory before any git operation.
-    // Uses root-capable rm to handle files written by Docker/Gradle daemons
-    // that the jenkins user cannot overwrite.
     sh '''
         if [ -d .git ]; then
             git -C . clean -fdx || true
             git -C . reset --hard || true
         fi
-        # Remove known build-tool cache dirs that cause write conflicts
         rm -rf .gradle-home .gradle .m2 target build dist node_modules || true
     '''
 
@@ -550,18 +496,11 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
                         refspec: "+refs/tags/${tagName}:refs/tags/${tagName}"
                     ]],
                     extensions: [
-                        [$class: 'CloneOption',
-                            shallow: true,
-                            depth: 1,
-                            noTags: false,
-                            honorRefspec: true,
-                            timeout: 60
-                        ],
+                        [$class: 'CloneOption',   shallow: true, depth: 1, noTags: false, honorRefspec: true, timeout: 60],
                         [$class: 'CheckoutOption', timeout: 60],
                         [$class: 'CleanBeforeCheckout', deleteUntrackedNestedRepositories: true]
                     ]
                 ])
-
                 return candidate
             }
 
@@ -573,19 +512,13 @@ def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String 
                     credentialsId: credentialsId?.trim() ?: null
                 ]],
                 extensions: [
-                    [$class: 'CloneOption',
-                        shallow: true,
-                        depth: 1,
-                        noTags: true,
-                        honorRefspec: true,
-                        timeout: 60
-                    ],
+                    [$class: 'CloneOption',   shallow: true, depth: 1, noTags: true, honorRefspec: true, timeout: 60],
                     [$class: 'CheckoutOption', timeout: 60],
                     [$class: 'CleanBeforeCheckout', deleteUntrackedNestedRepositories: true]
                 ]
             ])
-
             return candidate
+
         } catch (Exception err) {
             lastError = err
             echo "Checkout failed for branch '${candidate}' from ${repoUrl}: ${err.getMessage()}"

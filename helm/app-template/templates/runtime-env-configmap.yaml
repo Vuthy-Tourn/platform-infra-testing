@@ -1,0 +1,30 @@
+{{- range $service := .Values.services }}
+{{- $ctx := dict "root" $ "service" $service }}
+{{- $envJson := trim (default "" $service.envJson) }}
+{{- $envEntries := $service.env | default (list) }}
+{{- if $envJson }}
+{{- $envEntries = fromJsonArray $envJson }}
+{{- end }}
+{{- $envVars := list }}
+{{- range $envEntry := $envEntries }}
+  {{- if not $envEntry.secret }}
+    {{- $envVars = append $envVars (dict "name" (toString $envEntry.name) "value" (default "" $envEntry.value)) }}
+  {{- end }}
+{{- end }}
+{{- if gt (len $envVars) 0 }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tenant-app.runtimeEnvConfigMapName" $ctx }}
+  namespace: {{ $.Values.workspace.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ include "tenant-app.syncWave" $ctx | quote }}
+  labels:
+    {{- include "tenant-app.labels" $ctx | nindent 4 }}
+data:
+  {{- range $envVars }}
+  {{ .name }}: {{ .value | quote }}
+  {{- end }}
+---
+{{- end }}
+{{- end }}
