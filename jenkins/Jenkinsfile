@@ -1,7 +1,7 @@
 @Library(['share_lib@master', 'a8s-sonarqube@main']) _
 
 pipeline {
-    agent none
+    agent { label 'istad' }
 
     options {
         timeout(time: 20, unit: 'MINUTES')
@@ -38,7 +38,6 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('Validate input') {
-            agent { label 'master' }
             steps {
                 script {
                     if (!params.REPO_URL?.trim()) {
@@ -115,7 +114,6 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('Checkout infra') {
-            agent { label 'master' }
             steps {
                 dir('platform-infra') {
                     checkout([
@@ -136,7 +134,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent { label 'master' }
             steps {
                 dir('user-app') {
                     deleteDir()
@@ -175,7 +172,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent { label 'master' }
             steps {
                 dir('user-app') {
                     script {
@@ -206,7 +202,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE && params.ENABLE_SONARQUBE_SCAN }
             }
-            agent { label 'master' }
             steps {
                 dir('user-app') {
                     script {
@@ -245,7 +240,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE && params.ENABLE_SONARQUBE_SCAN }
             }
-            agent { label 'master' }
             steps {
                 dir('user-app') {
                     script {
@@ -296,7 +290,6 @@ pipeline {
                         params.ENABLE_SONARQUBE_QUALITY_GATE
                 }
             }
-            agent { label 'master' }
             steps {
                 a8sSonarQualityGate(timeoutMinutes: 5, abortPipeline: true)
             }
@@ -310,7 +303,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
-            agent { label 'istad' }
             steps {
                 script {
                     // Fresh workspace: clear any leftovers from a previous run of
