@@ -392,7 +392,7 @@ pipeline {
 
                                 echo "[scan] Uploading report to DefectDojo"
                                 uploadDefectDojo(
-                                    defectdojoUrl         : 'https://defectdojo.devith.it.com',
+                                    defectdojoUrl         : 'https://defetchdojo.anajak-khmer.site',
                                     defectdojoCredentialId: 'DEFECTDOJO',
                                     reportPath            : reportPath,
                                     productTypeName       : 'Web Applications',
