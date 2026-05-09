@@ -312,7 +312,6 @@ pipeline {
 
                     unstash 'platform-infra-src'
                     unstash 'user-app-src'
-
                     // ── Generate Dockerfile ───────────────────────────────────
                     dir('user-app') {
                         sh '''
@@ -380,11 +379,11 @@ pipeline {
                         // ── Scan ──────────────────────────────────────────────
                         script {
                             if (params.ENABLE_TRIVY_SCAN) {
-                                def reportPath = '/home/enz/trivy/reports/trivy-report.json'
+                                def reportPath = '${env.WORKSPACE}/trivy/reports/trivy-report.json'
                                 echo "[scan] Starting Trivy scan for ${env.IMAGE_FULL}"
                                 def findingCount = trivyScan(
                                     fullImage   : env.IMAGE_FULL,
-                                    trivyPath   : '/home/enz/trivy/docker-compose.yml',
+                                    trivyPath   : '${env.WORKSPACE}/trivy/docker-compose.yml',
                                     reportPath  : reportPath,
                                     gateSeverity: 'HIGH,CRITICAL'
                                 )
