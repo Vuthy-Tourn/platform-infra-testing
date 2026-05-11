@@ -283,20 +283,22 @@ pipeline {
                                     wait     : true,
                                     propagate: false,
                                     parameters: [
-                                        string(name: 'REPO_URL',                   value: capturedSvc.repoUrl),
-                                        string(name: 'BRANCH',                     value: capturedSvc.branch),
-                                        string(name: 'USER_ID',                    value: params.USER_ID),
-                                        string(name: 'WORKSPACE_ID',               value: env.EFFECTIVE_WORKSPACE_ID),
-                                        string(name: 'PROJECT_NAME',               value: capturedSvc.name),
-                                        string(name: 'FRAMEWORK',                  value: capturedSvc.framework),
-                                        string(name: 'IMAGE_TAG',                  value: capturedSvc.imageTag),
-                                        string(name: 'REPO_CREDENTIALS_ID',        value: capturedSvc.repoCredentialsId),
-                                        string(name: 'SONARQUBE_SERVER_NAME',      value: params.SONARQUBE_SERVER_NAME),
-                                        string(name: 'SONARQUBE_SCANNER_TOOL',     value: params.SONARQUBE_SCANNER_TOOL),
-                                        string(name: 'SONARQUBE_JDK_TOOL_PREFIX',  value: params.SONARQUBE_JDK_TOOL_PREFIX),
-                                        booleanParam(name: 'ENABLE_SONARQUBE_SCAN',         value: params.ENABLE_SONARQUBE_SCAN),
+                                        string(name: 'REPO_URL', value: capturedSvc.repoUrl),
+                                        string(name: 'BRANCH', value: capturedSvc.branch),
+                                        string(name: 'USER_ID', value: params.USER_ID),
+                                        string(name: 'WORKSPACE_ID', value: env.EFFECTIVE_WORKSPACE_ID),
+                                        string(name: 'PROJECT_NAME', value: capturedSvc.name),
+                                        string(name: 'SERVICE_NAME', value: capturedSvc.name),
+                                        string(name: 'SERVICE_PATH', value: capturedSvc.servicePath ?: '.'),
+                                        string(name: 'FRAMEWORK', value: capturedSvc.framework),
+                                        string(name: 'IMAGE_TAG', value: capturedSvc.imageTag),
+                                        string(name: 'REPO_CREDENTIALS_ID', value: capturedSvc.repoCredentialsId),
+                                        string(name: 'SONARQUBE_SERVER_NAME', value: params.SONARQUBE_SERVER_NAME),
+                                        string(name: 'SONARQUBE_SCANNER_TOOL', value: params.SONARQUBE_SCANNER_TOOL),
+                                        string(name: 'SONARQUBE_JDK_TOOL_PREFIX', value: params.SONARQUBE_JDK_TOOL_PREFIX),
+                                        booleanParam(name: 'ENABLE_SONARQUBE_SCAN', value: params.ENABLE_SONARQUBE_SCAN),
                                         booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', value: params.ENABLE_SONARQUBE_QUALITY_GATE),
-                                        booleanParam(name: 'ROLLBACK_MODE',                 value: params.ROLLBACK_MODE)
+                                        booleanParam(name: 'ROLLBACK_MODE', value: params.ROLLBACK_MODE)
                                     ]
 
                                 def childNumber = downstreamBuild?.number?.toString() ?: 'unknown'
