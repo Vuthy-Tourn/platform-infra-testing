@@ -312,9 +312,11 @@ pipeline {
 
                     unstash 'platform-infra-src'
                     unstash 'user-app-src'
-                    // ── Generate Dockerfile ───────────────────────────────────
+                    // ── Generate / Detect Dockerfile ───────────────────────────────────
                     dir('user-app') {
                         sh '''
+                            set -e
+
                             SCRIPTS_DIR=""
                             for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
                                 if [ -f "$d/generate-dockerfile.sh" ]; then
@@ -322,18 +324,40 @@ pipeline {
                                     break
                                 fi
                             done
+
                             if [ -z "$SCRIPTS_DIR" ]; then
                                 echo "ERROR: generate-dockerfile.sh not found."
                                 ls -la "$WORKSPACE" || true
                                 exit 1
                             fi
 
-                            if [ -f Dockerfile ]; then
-                                echo "[dockerfile] Using user-provided Dockerfile."
+                            # Detect Dockerfile in repo root, case-insensitive
+                            DOCKERFILE_PATH=$(find . -maxdepth 1 -iname "Dockerfile" -type f | head -1)
+
+                            if [ -n "$DOCKERFILE_PATH" ]; then
+                                echo "[dockerfile] Using user-provided Dockerfile: $DOCKERFILE_PATH"
+
+                                # Normalize name to Dockerfile if user used dockerfile/DockerFile
+                                if [ "$DOCKERFILE_PATH" != "./Dockerfile" ]; then
+                                    cp "$DOCKERFILE_PATH" ./Dockerfile
+                                    echo "[dockerfile] Normalized $DOCKERFILE_PATH to ./Dockerfile"
+                                fi
                             else
+                                echo "[dockerfile] No Dockerfile found in repo root."
                                 echo "[dockerfile] Generating from platform template for ${FRAMEWORK}."
+
                                 bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
+
+                                if [ ! -f Dockerfile ]; then
+                                    echo "ERROR: Dockerfile generation failed."
+                                    exit 1
+                                fi
+
+                                echo "[dockerfile] Generated Dockerfile successfully."
                             fi
+
+                            echo "[dockerfile] Final Dockerfile:"
+                            ls -la Dockerfile
                         '''
                     }
 
