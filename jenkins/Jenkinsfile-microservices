@@ -228,7 +228,8 @@ pipeline {
                             serviceType         : svc.serviceType?.toString()?.trim() ?: 'internal',
                             exposePublic : svc.exposePublic?.toString()?.toBoolean(),
                             primaryPublic: svc.primaryPublic?.toString()?.toBoolean(),
-                            servicePath: svc.servicePath ?: '.',
+                            servicePath  : svc.servicePath?.toString()?.trim() ?: '.',
+                            serviceModule: svc.serviceModule?.toString()?.trim() ?: '',
                             // Pass index so mergeEnvAndRelationships temp file is unique per service
                             mergedEnvJson       : mergeEnvAndRelationships(
                                 svc.envJson?.toString()?.trim() ?: '[]',
@@ -289,7 +290,7 @@ pipeline {
                                         string(name: 'WORKSPACE_ID', value: env.EFFECTIVE_WORKSPACE_ID),
                                         string(name: 'PROJECT_NAME', value: capturedSvc.name),
                                         string(name: 'SERVICE_NAME', value: capturedSvc.name),
-                                        string(name: 'SERVICE_PATH', value: capturedSvc.servicePath ?: '.'),
+                                        string(name: 'SERVICE_PATH', value: capturedSvc.servicePath ?: capturedSvc.name),
                                         string(name: 'FRAMEWORK', value: capturedSvc.framework),
                                         string(name: 'IMAGE_TAG', value: capturedSvc.imageTag),
                                         string(name: 'REPO_CREDENTIALS_ID', value: capturedSvc.repoCredentialsId),
@@ -654,7 +655,7 @@ fields = [
     "platformHostOverride", "imageRepository", "commitSha", "mergedEnvJson",
     "runtimeConfigFileName",
     "exposePublic", "primaryPublic",
-    "servicePath"
+    "servicePath", "serviceModule"
 ]
 
 for svc in payload:
@@ -701,9 +702,10 @@ PY""",
                 runtimeConfigFileContent: c[15] ? new String(Base64.getDecoder().decode(c[15]), 'UTF-8') : '',
                 exposePublic        : c[16]?.toBoolean(),
                 primaryPublic       : c[17]?.toBoolean(),
-                servicePath: c[18] ?: '.',
-                dependsOn           : c[19] ? c[19].split('\u001f').findAll { it } : [],
-                relationshipsToken  : c[20]
+                servicePath  : c[18] ?: '.',
+                serviceModule: c[19] ?: '',
+                dependsOn    : c[20] ? c[20].split('\u001f').findAll { it } : [],
+                relationshipsToken: c[21]
             ]
         }
     } finally {
@@ -971,11 +973,13 @@ def decodeServicesFromState(String state) {
             mergedEnvJson       : c.size() > 13 ? c[13] : '',
             runtimeConfigFileName: c.size() > 14 ? c[14] : '',
             runtimeConfigFileContent: c.size() > 15 && c[15] ? new String(Base64.getDecoder().decode(c[15]), 'UTF-8') : '',
-            dependsOn           : (c.size() > 16 && c[16]) ? c[16].split('\u001f').findAll { it } : [],
-            relationshipsToken  : c.size() > 17 ? c[17] : '',
-            syncWave            : c.size() > 18 ? c[18] : '0',
-            exposePublic        : c.size() > 19 ? c[19].toBoolean() : false,
-            primaryPublic       : c.size() > 20 ? c[20].toBoolean() : false
+            servicePath  : c.size() > 16 && c[16] ? c[16] : '.',
+            serviceModule: c.size() > 17 ? c[17] : '',
+            dependsOn    : (c.size() > 18 && c[18]) ? c[18].split('\u001f').findAll { it } : [],
+            relationshipsToken: c.size() > 19 ? c[19] : '',
+            syncWave     : c.size() > 20 ? c[20] : '0',
+            exposePublic : c.size() > 21 ? c[21].toBoolean() : false,
+            primaryPublic: c.size() > 22 ? c[22].toBoolean() : false
         ]
     }
 }

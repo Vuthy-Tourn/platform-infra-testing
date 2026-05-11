@@ -15,8 +15,9 @@ pipeline {
         string(name: 'USER_ID',                   defaultValue: '', description: 'Tenant user id')
         string(name: 'WORKSPACE_ID',              defaultValue: '', description: 'Workspace id/slug for GitOps path partitioning and Kubernetes namespace')
         string(name: 'PROJECT_NAME',              defaultValue: '', description: 'Project slug')
-        string(name: 'SERVICE_NAME', defaultValue: '', description: 'Microservice name')
-        string(name: 'SERVICE_PATH', defaultValue: '.', description: 'Path to service inside repo. Use . for multi-repo')
+        string(name: 'SERVICE_NAME',              defaultValue: '', description: 'Microservice name')
+        string(name: 'SERVICE_PATH',              defaultValue: '.', description: 'Path to service inside repo. Use . for multi-repo')
+        string(name: 'SERVICE_MODULE',            defaultValue: '', description: 'Gradle module name. Empty for single-service repo')
         string(name: 'APP_NAME',                  defaultValue: '', description: 'Legacy alias for PROJECT_NAME')
         string(name: 'IMAGE_TAG',                 defaultValue: '', description: 'Optional image tag provided by backend (deploy or rollback)')
         string(name: 'FRAMEWORK',                 defaultValue: '', description: 'Optional framework override provided by backend')
@@ -411,7 +412,7 @@ pipeline {
                                     ${CACHE_POLICY_ARG} \
                                     ${CACHE_FROM_ARG} \
                                     --build-arg BUILDKIT_INLINE_CACHE=1 \
-                                    --build-arg SERVICE_NAME="${EFFECTIVE_SERVICE_NAME}" \
+                                    --build-arg SERVICE_MODULE="${SERVICE_MODULE}" \
                                     -f "${SERVICE_PATH}/Dockerfile" \
                                     -t "${IMAGE_FULL}" \
                                     -t "${IMAGE_CACHE_REF}" \
