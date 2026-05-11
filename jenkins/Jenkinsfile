@@ -411,6 +411,7 @@ pipeline {
                                     ${CACHE_POLICY_ARG} \
                                     ${CACHE_FROM_ARG} \
                                     --build-arg BUILDKIT_INLINE_CACHE=1 \
+                                    --build-arg SERVICE_NAME="${EFFECTIVE_SERVICE_NAME}" \
                                     -f "${SERVICE_PATH}/Dockerfile" \
                                     -t "${IMAGE_FULL}" \
                                     -t "${IMAGE_CACHE_REF}" \

@@ -1,18 +1,35 @@
 ARG JAVA_VERSION=21
 ARG GRADLE_VERSION=8.10.2
+ARG SERVICE_NAME=""
 
 FROM gradle:${GRADLE_VERSION}-jdk${JAVA_VERSION} AS builder
+
 WORKDIR /app
 COPY . .
 
 RUN if [ -f gradlew ]; then \
-      chmod +x gradlew && ./gradlew clean bootJar --no-daemon -x test; \
+      chmod +x gradlew; \
+      if [ -n "$SERVICE_NAME" ] && [ -d "$SERVICE_NAME" ]; then \
+        ./gradlew :${SERVICE_NAME}:bootJar --no-daemon -x test; \
+      else \
+        ./gradlew bootJar --no-daemon -x test; \
+      fi; \
     else \
-      gradle clean bootJar --no-daemon -x test; \
+      if [ -n "$SERVICE_NAME" ] && [ -d "$SERVICE_NAME" ]; then \
+        gradle :${SERVICE_NAME}:bootJar --no-daemon -x test; \
+      else \
+        gradle bootJar --no-daemon -x test; \
+      fi; \
     fi
 
 FROM eclipse-temurin:${JAVA_VERSION}-jre-alpine
+
 WORKDIR /app
-COPY --from=builder /app/build/libs/*.jar app.jar
+
+ARG SERVICE_NAME=""
+
+COPY --from=builder /app/${SERVICE_NAME}/build/libs/*.jar app.jar
+
 EXPOSE 8080
+
 ENTRYPOINT ["java", "-jar", "app.jar"]
