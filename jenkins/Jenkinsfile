@@ -24,7 +24,7 @@ pipeline {
         string(name: 'SONARQUBE_JDK_TOOL_PREFIX', defaultValue: 'jdk', description: 'Jenkins JDK tool name prefix used for Java SonarQube analysis (example: jdk -> jdk21)')
         booleanParam(name: 'ENABLE_SONARQUBE_SCAN',         defaultValue: false, description: 'Run SonarQube source analysis')
         booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', defaultValue: false, description: 'Wait for SonarQube quality gate before build')
-        booleanParam(name: 'ENABLE_TRIVY_SCAN',             defaultValue: false,  description: 'Run local Trivy image scan')
+        booleanParam(name: 'ENABLE_TRIVY_SCAN',             defaultValue: true,  description: 'Run local Trivy image scan')
         booleanParam(name: 'ROLLBACK_MODE',                 defaultValue: false, description: 'Skip build/scan/push and update GitOps with a saved image tag')
     }
 
@@ -379,17 +379,26 @@ pipeline {
                         // ── Scan ──────────────────────────────────────────────
                         script {
                             if (params.ENABLE_TRIVY_SCAN) {
-                                def reportPath = "$WORKSPACE/trivy/reports/trivy-report.json"
+                                def trivyPath = "${env.WORKSPACE}/trivy/docker-compose.yml"
+                                def reportPath = "${env.WORKSPACE}/trivy/reports/trivy-report.json"
+
+                                sh """
+                                    mkdir -p "${env.WORKSPACE}/trivy/reports"
+                                """
+
                                 echo "[scan] Starting Trivy scan for ${env.IMAGE_FULL}"
+
                                 def findingCount = trivyScan(
                                     fullImage   : env.IMAGE_FULL,
-                                    trivyPath   : "$WORKSPACE/trivy/docker-compose.yml",
+                                    trivyPath   : trivyPath,
                                     reportPath  : reportPath,
                                     gateSeverity: 'HIGH,CRITICAL'
                                 )
+
                                 echo "[scan] ${findingCount} HIGH/CRITICAL finding(s)"
 
                                 echo "[scan] Uploading report to DefectDojo"
+
                                 uploadDefectDojo(
                                     defectdojoUrl         : 'https://defetchdojo.anajak-khmer.site',
                                     defectdojoCredentialId: 'DEFECTDOJO',
@@ -399,7 +408,9 @@ pipeline {
                                     engagementName        : "Jenkins-${env.BUILD_NUMBER}",
                                     testTitle             : "Trivy Image Scan - ${env.IMAGE_TAG}"
                                 )
+
                                 echo "[scan] DefectDojo upload completed"
+
                                 securityGate(severity: 'CRITICAL')
                             } else {
                                 echo '[scan] ENABLE_TRIVY_SCAN=false — skipping.'
