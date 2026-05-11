@@ -943,6 +943,8 @@ def encodeServicesForState(List services) {
             svc.mergedEnvJson,
             svc.runtimeConfigFileName,
             svc.runtimeConfigFileContent ? Base64.getEncoder().encodeToString(svc.runtimeConfigFileContent.bytes) : '',
+            svc.servicePath ?: '.',
+            svc.serviceModule ?: '',
             ((svc.dependsOn ?: []).collect { it?.toString() ?: '' }.findAll { it }.join('\u001f')),
             svc.relationshipsToken,
             svc.syncWave,
