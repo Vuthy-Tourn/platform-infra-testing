@@ -9,24 +9,24 @@ pipeline {
         buildDiscarder(logRotator(numToKeepStr: '50'))
     }
 
-    parameters {
-        string(name: 'REPO_URL',                  defaultValue: '', description: 'Git repository URL from user (GitHub/GitLab)')
-        string(name: 'BRANCH',                    defaultValue: 'main', description: 'Git branch to build')
-        string(name: 'USER_ID',                   defaultValue: '', description: 'Tenant user id')
-        string(name: 'WORKSPACE_ID',              defaultValue: '', description: 'Workspace id/slug for GitOps path partitioning and Kubernetes namespace')
-        string(name: 'PROJECT_NAME',              defaultValue: '', description: 'Project slug')
-        string(name: 'APP_NAME',                  defaultValue: '', description: 'Legacy alias for PROJECT_NAME')
-        string(name: 'IMAGE_TAG',                 defaultValue: '', description: 'Optional image tag provided by backend (deploy or rollback)')
-        string(name: 'FRAMEWORK',                 defaultValue: '', description: 'Optional framework override provided by backend')
-        string(name: 'REPO_CREDENTIALS_ID',       defaultValue: '', description: 'Optional Jenkins credential id for private user repositories')
-        string(name: 'SONARQUBE_SERVER_NAME',     defaultValue: 'sonarqube', description: 'Jenkins SonarQube server configuration name')
-        string(name: 'SONARQUBE_SCANNER_TOOL',    defaultValue: '', description: 'Optional Jenkins SonarScanner tool name; empty uses sonar-scanner from PATH')
-        string(name: 'SONARQUBE_JDK_TOOL_PREFIX', defaultValue: 'jdk', description: 'Jenkins JDK tool name prefix used for Java SonarQube analysis (example: jdk -> jdk21)')
-        booleanParam(name: 'ENABLE_SONARQUBE_SCAN',         defaultValue: false, description: 'Run SonarQube source analysis')
-        booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', defaultValue: false, description: 'Wait for SonarQube quality gate before build')
-        booleanParam(name: 'ENABLE_TRIVY_SCAN',             defaultValue: true,  description: 'Run local Trivy image scan')
-        booleanParam(name: 'ROLLBACK_MODE',                 defaultValue: false, description: 'Skip build/scan/push and update GitOps with a saved image tag')
-    }
+    parameters: [
+        string(name: 'REPO_URL', value: capturedSvc.repoUrl),
+        string(name: 'BRANCH', value: capturedSvc.branch),
+        string(name: 'USER_ID', value: params.USER_ID),
+        string(name: 'WORKSPACE_ID', value: env.EFFECTIVE_WORKSPACE_ID),
+        string(name: 'PROJECT_NAME', value: capturedSvc.name),
+        string(name: 'SERVICE_NAME', value: capturedSvc.name),
+        string(name: 'SERVICE_PATH', value: capturedSvc.servicePath ?: '.'),
+        string(name: 'FRAMEWORK', value: capturedSvc.framework),
+        string(name: 'IMAGE_TAG', value: capturedSvc.imageTag),
+        string(name: 'REPO_CREDENTIALS_ID', value: capturedSvc.repoCredentialsId),
+        string(name: 'SONARQUBE_SERVER_NAME', value: params.SONARQUBE_SERVER_NAME),
+        string(name: 'SONARQUBE_SCANNER_TOOL', value: params.SONARQUBE_SCANNER_TOOL),
+        string(name: 'SONARQUBE_JDK_TOOL_PREFIX', value: params.SONARQUBE_JDK_TOOL_PREFIX),
+        booleanParam(name: 'ENABLE_SONARQUBE_SCAN', value: params.ENABLE_SONARQUBE_SCAN),
+        booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', value: params.ENABLE_SONARQUBE_QUALITY_GATE),
+        booleanParam(name: 'ROLLBACK_MODE', value: params.ROLLBACK_MODE)
+    ]
 
     environment {
         INFRA_REPO_URL      = credentials('infra-repo-url-micro')

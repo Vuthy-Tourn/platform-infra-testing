@@ -228,6 +228,7 @@ pipeline {
                             serviceType         : svc.serviceType?.toString()?.trim() ?: 'internal',
                             exposePublic : svc.exposePublic?.toString()?.toBoolean(),
                             primaryPublic: svc.primaryPublic?.toString()?.toBoolean(),
+                            servicePath: svc.servicePath ?: '.',
                             // Pass index so mergeEnvAndRelationships temp file is unique per service
                             mergedEnvJson       : mergeEnvAndRelationships(
                                 svc.envJson?.toString()?.trim() ?: '[]',
@@ -651,6 +652,7 @@ fields = [
     "platformHostOverride", "imageRepository", "commitSha", "mergedEnvJson",
     "runtimeConfigFileName",
     "exposePublic", "primaryPublic",
+    "servicePath"
 ]
 
 for svc in payload:
@@ -697,8 +699,9 @@ PY""",
                 runtimeConfigFileContent: c[15] ? new String(Base64.getDecoder().decode(c[15]), 'UTF-8') : '',
                 exposePublic        : c[16]?.toBoolean(),
                 primaryPublic       : c[17]?.toBoolean(),
-                dependsOn           : c[18] ? c[18].split('\u001f').findAll { it } : [],
-                relationshipsToken  : c[19]
+                servicePath: c[18] ?: '.',
+                dependsOn           : c[19] ? c[19].split('\u001f').findAll { it } : [],
+                relationshipsToken  : c[20]
             ]
         }
     } finally {
