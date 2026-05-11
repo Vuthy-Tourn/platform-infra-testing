@@ -41,14 +41,21 @@ slugify() {
   local raw="$1"
   local max_len="${2:-40}"
   local normalized
+  local truncated
 
-  normalized="$(echo "${raw}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g')"
+  normalized="$(echo "${raw}" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g')"
 
   if [[ -z "${normalized}" ]]; then
     normalized="x"
   fi
 
-  echo "${normalized}" | cut -c1-"${max_len}"
+  truncated="$(echo "${normalized}" | cut -c1-"${max_len}")"
+
+  truncated="$(echo "${truncated}" | sed -E 's/-+$//')"
+
+  echo "${truncated}"
 }
 
 copy_chart_template() {
@@ -150,7 +157,7 @@ def slugify(raw: str, max_len: int = 40) -> str:
     normalized = re.sub(r'[^a-z0-9-]+', '-', raw.strip().lower())
     normalized = re.sub(r'-{2,}', '-', normalized).strip('-')
     normalized = normalized or "x"
-    return normalized[:max_len]
+    return normalized[:max_len].rstrip("-")
 
 def default_container_port(framework: str) -> int:
     framework = (framework or "").strip()
@@ -242,7 +249,7 @@ for svc in services:
 
     custom_domain = str(svc.get("customDomain") or "").strip()
     platform_host_override = str(svc.get("platformHostOverride") or "").strip()
-    host = custom_domain or platform_host_override or f"{slugify(project_name, 24)}-{slugify(name, 24)}-{workspace_id}.{platform_domain}"
+    host = custom_domain or platform_host_override or f"{{slugify(name, 24)}-{workspace_id}.{platform_domain}"
     env_json = str(svc.get("envJson") or "[]").strip() or "[]"
     runtime_config_file_name = str(svc.get("runtimeConfigFileName") or "").strip()
     runtime_config_file_content_b64 = str(svc.get("runtimeConfigFileContentBase64") or "").strip()
