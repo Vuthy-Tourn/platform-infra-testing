@@ -656,7 +656,7 @@ fields = [
     "platformHostOverride", "imageRepository", "commitSha", "mergedEnvJson",
     "runtimeConfigFileName",
     "exposePublic", "primaryPublic",
-    "servicePath", "serviceModule"
+    "sourcePath", "serviceModule"
 ]
 
 for svc in payload:

@@ -410,7 +410,7 @@ pipeline {
                                 DOCKERFILE_SOURCE="generated"
 
                                 if [ -f "${DOCKERFILE_META_FILE}" ]; then
-                                    . "${DOCKERFILE_META_FILE}"
+                                    . "./${DOCKERFILE_META_FILE}"
                                 fi
 
                                 CACHE_FROM_ARG=""
