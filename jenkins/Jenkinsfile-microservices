@@ -95,10 +95,10 @@ pipeline {
                     env.NORMALIZED_REGISTRY_REPOSITORY = registryContext.repositoryRoot
                     env.REGISTRY_LOGIN_SERVER          = registryContext.loginServer
 
-                    echo "Validated ${services.size()} service(s) for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
-                    echo "Workspace stack name    : ${env.SAFE_STACK_NAME}"
-                    echo "Deployment namespace    : ${env.SAFE_WORKSPACE_ID}"
-                    echo "Downstream service job  : ${params.SERVICE_JOB_NAME}"
+                    echo "[deploy] Workspace request received for ${services.size()} service(s)"
+                    echo "[deploy] Workspace stack: ${env.SAFE_STACK_NAME}"
+                    echo "[deploy] Namespace: ${env.SAFE_WORKSPACE_ID}"
+                    echo "[deploy] Child service job: ${params.SERVICE_JOB_NAME}"
                 }
             }
         }
@@ -142,7 +142,7 @@ pipeline {
                     def ordered  = topologicalSort(services)
                     env.ORDERED_SERVICE_NAMES  = ordered.collect { it.name }.join(',')
                     env.ORDERED_SERVICES_STATE = encodeServicesForState(ordered)
-                    echo "Deploy order: ${env.ORDERED_SERVICE_NAMES}"
+                    echo "[deploy] Service rollout order: ${env.ORDERED_SERVICE_NAMES}"
                 }
             }
         }
@@ -245,7 +245,7 @@ pipeline {
                     }
 
                     env.PLANNED_SERVICES_STATE = encodeServicesForState(plannedServices)
-                    echo "Prepared release plan for ${plannedServices.size()} service(s)"
+                    echo "[deploy] Release plan ready for ${plannedServices.size()} service(s)"
                 }
             }
         }
@@ -263,7 +263,7 @@ pipeline {
                     def selectiveBuild     = !params.ROLLBACK_MODE && !params.DESTROY_MODE && !changedServiceNames.isEmpty()
 
                     if (selectiveBuild) {
-                        echo "Selective rebuild enabled for: ${changedServiceNames.join(', ')}"
+                        echo "[deploy] Selective rebuild enabled for: ${changedServiceNames.join(', ')}"
                     }
 
                     def parallelBuilds = [:]
@@ -278,8 +278,8 @@ pipeline {
 
                         def capturedSvc = svc
                         parallelBuilds["build-${capturedSvc.name}"] = {
-                            echo "=== Building: ${capturedSvc.name} (type: ${capturedSvc.serviceType}) ==="
-                            echo "[dispatch:${capturedSvc.name}] SERVICE_PATH=${capturedSvc.servicePath ?: '.'} SERVICE_MODULE=${capturedSvc.serviceModule ?: ''} FRAMEWORK=${capturedSvc.framework ?: ''}"
+                            echo "[service:${capturedSvc.name}] Starting service build (${capturedSvc.serviceType})"
+                            echo "[dispatch:${capturedSvc.name}] path=${capturedSvc.servicePath ?: '.'} framework=${capturedSvc.framework ?: ''}"
                             try {
                                 def downstreamBuild = build job: params.SERVICE_JOB_NAME,
                                     wait     : true,
@@ -292,7 +292,6 @@ pipeline {
                                         string(name: 'PROJECT_NAME', value: capturedSvc.name),
                                         string(name: 'SERVICE_NAME', value: capturedSvc.name),
                                         string(name: 'SERVICE_PATH', value: capturedSvc.servicePath ?: capturedSvc.name),
-                                        string(name: 'SERVICE_MODULE', value: capturedSvc.serviceModule ?: ''),
                                         string(name: 'FRAMEWORK', value: capturedSvc.framework),
                                         string(name: 'IMAGE_TAG', value: capturedSvc.imageTag),
                                         string(name: 'REPO_CREDENTIALS_ID', value: capturedSvc.repoCredentialsId),
@@ -309,16 +308,16 @@ pipeline {
                                 def childUrl    = downstreamBuild?.absoluteUrl?.toString()?.trim() ?: ''
                                 def urlSuffix   = childUrl ? " · ${childUrl}" : ''
 
-                                echo "[service:${capturedSvc.name}] Child build #${childNumber} → ${childResult}${urlSuffix}"
+                                echo "[service:${capturedSvc.name}] Child build #${childNumber} finished with ${childResult}${urlSuffix}"
 
                                 if (childResult != 'SUCCESS') {
                                     failures << [name: capturedSvc.name, result: childResult, build: childNumber, url: childUrl]
-                                    echo "=== ${capturedSvc.name}: FAILED (${childResult}) ==="
+                                    echo "[error] ${capturedSvc.name} failed with result ${childResult}"
                                 } else {
-                                    echo "=== ${capturedSvc.name}: SUCCESS ==="
+                                    echo "[service:${capturedSvc.name}] Build completed successfully"
                                 }
                             } catch (Exception e) {
-                                echo "=== ${capturedSvc.name}: EXCEPTION — ${e.message} ==="
+                                echo "[error] ${capturedSvc.name} failed before completion — ${e.message}"
                                 failures << [name: capturedSvc.name, result: 'ERROR', build: 'unknown', url: '', detail: e.message]
                             }
                         }
@@ -330,7 +329,7 @@ pipeline {
                         failures.each { f ->
                             def urlSuffix    = f.url    ? " · ${f.url}"    : ''
                             def detailSuffix = f.detail ? " · ${f.detail}" : ''
-                            echo "[FAILURE] ${f.name} — result=${f.result} build=#${f.build}${urlSuffix}${detailSuffix}"
+                            echo "[error] ${f.name} — result=${f.result} build=#${f.build}${urlSuffix}${detailSuffix}"
                         }
                         error("Services failed: ${failures.collect { it.name }.join(', ')}")
                     }
@@ -364,9 +363,9 @@ pipeline {
                         : (params.ROLLBACK_MODE ? 'rollback' : (params.GITOPS_ONLY_UPDATE ? 'config-update' : 'deploy'))
 
                     if (params.ROLLBACK_MODE) {
-                        echo "Rollback mode: updating GitOps to saved image tags only."
+                        echo "[deploy] Rollback mode enabled: updating GitOps to saved image tags only."
                     } else if (params.GITOPS_ONLY_UPDATE) {
-                        echo "GitOps-only update mode: skipping child build jobs."
+                        echo "[deploy] GitOps-only update mode enabled: skipping child build jobs."
                     }
 
                     def workspaceCommitMessage =
@@ -386,6 +385,7 @@ pipeline {
                     )]) {
                         sh '''
                             set -e
+                            set +x
 
                             test -f "$WORKSPACE/platform-infra/jenkins/scripts/update-gitops.sh"
 
@@ -538,12 +538,12 @@ pipeline {
                                     cd "$WORKSPACE/gitops-batch"
                                     git add apps applications templates
                                     if git diff --cached --quiet; then
-                                        echo "No batched GitOps changes required."
+                                        echo "[deploy] No GitOps manifest changes were needed."
                                         exit 0
                                     fi
                                     git commit -m "${BATCH_COMMIT_MESSAGE}" >/dev/null
                                     git push origin "${GITOPS_BRANCH}" >/dev/null
-                                    echo "GitOps changes pushed."
+                                    echo "[deploy] GitOps manifest update pushed."
                                 '''
                             }
                         }
@@ -557,24 +557,24 @@ pipeline {
         success {
             script {
                 if (params.DESTROY_MODE) {
-                    echo "Destroy completed for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+                    echo "[success] Destroy completed for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
                 } else {
-                    echo "All services processed for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
+                    echo "[success] All services processed for workspace ${env.EFFECTIVE_WORKSPACE_ID}"
                 }
             }
         }
         failure {
             script {
                 echo params.DESTROY_MODE
-                    ? "Destroy failed. Check orchestrator logs."
-                    : "One or more services failed. Check orchestrator logs."
+                    ? "[error] Destroy failed. Check the deployment log for the failing step."
+                    : "[error] One or more services failed. Check the deployment log for the failing step."
             }
         }
         always {
             script {
-                echo 'Workspace kept on disk for Git and build-cache reuse.'
-                sh 'find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle-home" -type d -exec rm -rf {} + 2>/dev/null || true'
-                sh 'find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle"      -type d -exec rm -rf {} + 2>/dev/null || true'
+                echo '[deploy] Workspace kept on disk for Git and layer cache reuse.'
+                sh 'set +x; find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle-home" -type d -exec rm -rf {} + 2>/dev/null || true'
+                sh 'set +x; find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle"      -type d -exec rm -rf {} + 2>/dev/null || true'
             }
         }
     }

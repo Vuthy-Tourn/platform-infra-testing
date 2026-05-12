@@ -324,6 +324,7 @@ pipeline {
             }
             steps {
                 script {
+                    echo "[deploy] Preparing build workspace for ${env.EFFECTIVE_SERVICE_NAME}"
                     dir('platform-infra') { deleteDir() }
                     dir('user-app')       { deleteDir() }
 
@@ -334,6 +335,7 @@ pipeline {
                     dir('user-app') {
                         sh '''
                             set -e
+                            set +x
 
                             SERVICE_PATH="${EFFECTIVE_SERVICE_PATH:-.}"
                             DOCKERFILE_META_FILE=".jenkins-dockerfile-meta"
@@ -359,15 +361,15 @@ pipeline {
                             DOCKERFILE_PATH=$(bash "${SCRIPTS_DIR}/resolve-dockerfile.sh" "$SERVICE_PATH")
 
                             if [ -n "$DOCKERFILE_PATH" ]; then
-                                echo "[dockerfile] Using user-provided Dockerfile: $DOCKERFILE_PATH"
+                                echo "[dockerfile] Using repository Dockerfile from $DOCKERFILE_PATH"
                                 if [ "$DOCKERFILE_PATH" != "$SERVICE_PATH/Dockerfile" ]; then
                                     cp "$DOCKERFILE_PATH" "$SERVICE_PATH/Dockerfile"
                                 fi
                                 DOCKERFILE_SOURCE="user"
                                 DOCKER_BUILD_CONTEXT="$SERVICE_PATH"
                             else
-                                echo "[dockerfile] No Dockerfile found in service path: $SERVICE_PATH"
-                                echo "[dockerfile] Generating Dockerfile for ${FRAMEWORK}"
+                                echo "[dockerfile] No repository Dockerfile found for $SERVICE_PATH"
+                                echo "[dockerfile] Generating platform Dockerfile for ${FRAMEWORK}"
 
                                 cd "$SERVICE_PATH"
                                 bash "${SCRIPTS_DIR}/generate-dockerfile.sh" "${FRAMEWORK}" "${SCRIPTS_DIR}"
@@ -381,8 +383,7 @@ pipeline {
                                 DOCKER_BUILD_CONTEXT="."
                             fi
 
-                            echo "[dockerfile] Final Dockerfile:"
-                            ls -la "$SERVICE_PATH/Dockerfile"
+                            echo "[dockerfile] Final Dockerfile ready at $SERVICE_PATH/Dockerfile"
                             echo "[dockerfile] Build context: ${DOCKER_BUILD_CONTEXT}"
 
                             {
@@ -408,6 +409,7 @@ pipeline {
                         env.IMAGE_CACHE_REF = "${REGISTRY_USERNAME}/${env.SERVICE_NAME}:cache"
 
                         sh '''
+                            set +x
                             echo "[auth] Logging in to ${REGISTRY_LOGIN_SERVER}"
                             echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
                                 -u "${REGISTRY_USERNAME}" --password-stdin
@@ -416,6 +418,7 @@ pipeline {
                         // ── Build ─────────────────────────────────────────
                         dir('user-app') {
                             sh '''
+                                set +x
                                 SERVICE_PATH="${EFFECTIVE_SERVICE_PATH:-.}"
                                 DOCKERFILE_META_FILE=".jenkins-dockerfile-meta"
                                 DOCKERFILE_PATH="${SERVICE_PATH}/Dockerfile"
@@ -461,6 +464,8 @@ pipeline {
                                     -t "${IMAGE_FULL}" \
                                     -t "${IMAGE_CACHE_REF}" \
                                     "${DOCKER_BUILD_CONTEXT}"
+
+                                echo "[build] Container image built successfully"
                             '''
                         }
 
@@ -506,13 +511,14 @@ pipeline {
 
                         // ── Push ──────────────────────────────────────────
                         sh '''
+                            set +x
                             echo "[push] Pushing versioned image ${IMAGE_FULL}"
                             docker push "${IMAGE_FULL}"
 
                             echo "[push] Pushing cache tag ${IMAGE_CACHE_REF}"
                             docker push "${IMAGE_CACHE_REF}"
 
-                            echo "[push] Done"
+                            echo "[push] Image publish completed"
                         '''
                     }
                 }
@@ -520,6 +526,7 @@ pipeline {
             post {
                 always {
                     sh '''
+                        set +x
                         docker rmi "${IMAGE_FULL}" "${IMAGE_CACHE_REF}" || true
                         docker image prune -f || true
                     '''
@@ -531,14 +538,14 @@ pipeline {
 
     post {
         success {
-            echo "Build succeeded for ${env.EFFECTIVE_PROJECT_NAME} — image: ${env.IMAGE_FULL}"
+            echo "[success] Deployment artifact ready for ${env.EFFECTIVE_PROJECT_NAME} — ${env.IMAGE_FULL}"
         }
         failure {
-            echo "Build failed for ${env.EFFECTIVE_PROJECT_NAME}. Check stage logs."
+            echo "[error] Build failed for ${env.EFFECTIVE_PROJECT_NAME}. Review the deployment log for the failing step."
         }
         always {
             script {
-                echo 'Workspace kept on disk for Git and build-cache reuse.'
+                echo '[deploy] Build workspace kept on disk for Git and layer cache reuse.'
             }
         }
     }
