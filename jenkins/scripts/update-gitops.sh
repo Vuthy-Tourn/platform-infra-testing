@@ -249,7 +249,7 @@ for svc in services:
 
     custom_domain = str(svc.get("customDomain") or "").strip()
     platform_host_override = str(svc.get("platformHostOverride") or "").strip()
-    host = custom_domain or platform_host_override or f"{{slugify(name, 24)}-{workspace_id}.{platform_domain}"
+    host = custom_domain or platform_host_override or f"{slugify(name, 24)}-{workspace_id}.{platform_domain}"
     env_json = str(svc.get("envJson") or "[]").strip() or "[]"
     runtime_config_file_name = str(svc.get("runtimeConfigFileName") or "").strip()
     runtime_config_file_content_b64 = str(svc.get("runtimeConfigFileContentBase64") or "").strip()
