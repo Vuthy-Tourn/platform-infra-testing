@@ -328,8 +328,8 @@ pipeline {
                 //
                 // Make sure DOCKERHUB_USERNAME exists in Jenkins env,
                 // or replace it directly with your Docker Hub username.
-                IMAGE_FULL = "${DOCKERHUB_USERNAME}/${SERVICE_NAME}:${IMAGE_TAG}"
-                IMAGE_CACHE_REF = "${DOCKERHUB_USERNAME}/${SERVICE_NAME}:cache"
+                IMAGE_FULL = "${REGISTRY_USERNAME}/${SERVICE_NAME}:${IMAGE_TAG}"
+                IMAGE_CACHE_REF = "${REGISTRY_USERNAME}/${SERVICE_NAME}:cache"
             }
             steps {
                 script {
@@ -408,7 +408,7 @@ pipeline {
                         // credentialsId: 'registry-credentials',
 
                         // Docker Hub credential
-                        credentialsId: 'dockerhub-credentials-micro',
+                        credentialsId: 'dockerhub-credentials-micro', 
                         usernameVariable: 'REGISTRY_USERNAME',
                         passwordVariable: 'REGISTRY_PASSWORD'
                     )]) {
