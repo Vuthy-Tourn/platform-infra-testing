@@ -17,7 +17,6 @@ pipeline {
         string(name: 'PROJECT_NAME',              defaultValue: '', description: 'Project slug')
         string(name: 'SERVICE_NAME',              defaultValue: '', description: 'Microservice name')
         string(name: 'SERVICE_PATH',              defaultValue: '.', description: 'Path to service inside repo. Use . for multi-repo')
-        string(name: 'SERVICE_MODULE',            defaultValue: '', description: 'Gradle module name. Empty for single-service repo')
         string(name: 'APP_NAME',                  defaultValue: '', description: 'Legacy alias for PROJECT_NAME')
         string(name: 'IMAGE_TAG',                 defaultValue: '', description: 'Optional image tag provided by backend (deploy or rollback)')
         string(name: 'FRAMEWORK',                 defaultValue: '', description: 'Optional framework override provided by backend')
@@ -316,16 +315,31 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
+            environment {
+                // ── Harbor registry - temporarily disabled ─────────────
+                // REGISTRY_LOGIN_SERVER = 'gohabor.anajak-khmer.site'
+
+                // ── Docker Hub temporary registry ──────────────────────
+                REGISTRY_LOGIN_SERVER = 'docker.io'
+
+                // Example:
+                // Docker Hub image format:
+                // dockerhub-username/service-name:tag
+                //
+                // Make sure DOCKERHUB_USERNAME exists in Jenkins env,
+                // or replace it directly with your Docker Hub username.
+                IMAGE_FULL = "${DOCKERHUB_USERNAME}/${SERVICE_NAME}:${IMAGE_TAG}"
+                IMAGE_CACHE_REF = "${DOCKERHUB_USERNAME}/${SERVICE_NAME}:cache"
+            }
             steps {
                 script {
-                    // Fresh workspace: clear any leftovers from a previous run of
-                    // this job on the same persistent workspace directory.
                     dir('platform-infra') { deleteDir() }
                     dir('user-app')       { deleteDir() }
 
                     unstash 'platform-infra-src'
                     unstash 'user-app-src'
-                    // ── Generate / Detect Dockerfile ───────────────────────────────────
+
+                    // ── Generate / Detect Dockerfile ─────────────────────
                     dir('user-app') {
                         sh '''
                             set -e
@@ -388,9 +402,12 @@ pipeline {
                         '''
                     }
 
-                    // ── Registry login (once) ─────────────────────────────────
+                    // ── Registry login ───────────────────────────────────
                     withCredentials([usernamePassword(
+                        // Harbor credential - temporarily disabled
                         // credentialsId: 'registry-credentials',
+
+                        // Docker Hub credential
                         credentialsId: 'dockerhub-credentials-micro',
                         usernameVariable: 'REGISTRY_USERNAME',
                         passwordVariable: 'REGISTRY_PASSWORD'
@@ -401,7 +418,7 @@ pipeline {
                                 -u "${REGISTRY_USERNAME}" --password-stdin
                         '''
 
-                        // ── Build ─────────────────────────────────────────────
+                        // ── Build ─────────────────────────────────────────
                         dir('user-app') {
                             sh '''
                                 SERVICE_PATH="${EFFECTIVE_SERVICE_PATH:-.}"
@@ -416,6 +433,7 @@ pipeline {
 
                                 CACHE_FROM_ARG=""
                                 CACHE_POLICY_ARG="--no-cache"
+                                EFFECTIVE_SERVICE_MODULE=""
 
                                 echo "[cache] Attempting to pull ${IMAGE_CACHE_REF}"
                                 if docker pull "${IMAGE_CACHE_REF}" > /dev/null 2>&1; then
@@ -426,17 +444,24 @@ pipeline {
                                     echo "[cache] No cache image — building from scratch"
                                 fi
 
+                                if printf '%s' "${FRAMEWORK:-}" | tr '[:upper:]' '[:lower:]' | grep -q 'gradle'; then
+                                    if [ -n "${SERVICE_PATH}" ] && [ "${SERVICE_PATH}" != "." ]; then
+                                        EFFECTIVE_SERVICE_MODULE=":$(printf '%s' "${SERVICE_PATH}" | sed 's#^\\./##; s#/$##; s#/#:#g')"
+                                    fi
+                                fi
+
                                 echo "[build] Building ${IMAGE_FULL}"
                                 echo "[build] Dockerfile: ${DOCKERFILE_PATH}"
                                 echo "[build] Context: ${DOCKER_BUILD_CONTEXT}"
                                 echo "[build] Dockerfile source: ${DOCKERFILE_SOURCE}"
+                                echo "[build] Derived service module: ${EFFECTIVE_SERVICE_MODULE:-<root>}"
 
                                 docker build \
                                     ${CACHE_POLICY_ARG} \
                                     ${CACHE_FROM_ARG} \
                                     --build-arg BUILDKIT_INLINE_CACHE=1 \
                                     --build-arg SERVICE_PATH="${SERVICE_PATH}" \
-                                    --build-arg SERVICE_MODULE="${SERVICE_MODULE}" \
+                                    --build-arg SERVICE_MODULE="${EFFECTIVE_SERVICE_MODULE}" \
                                     -f "${DOCKERFILE_PATH}" \
                                     -t "${IMAGE_FULL}" \
                                     -t "${IMAGE_CACHE_REF}" \
@@ -444,7 +469,7 @@ pipeline {
                             '''
                         }
 
-                        // ── Scan ──────────────────────────────────────────────
+                        // ── Scan ──────────────────────────────────────────
                         script {
                             if (params.ENABLE_TRIVY_SCAN) {
                                 def trivyPath = "/home/istad/trivy/docker-compose.yml"
@@ -464,7 +489,6 @@ pipeline {
                                 )
 
                                 echo "[scan] ${findingCount} HIGH/CRITICAL finding(s)"
-
                                 echo "[scan] Uploading report to DefectDojo"
 
                                 uploadDefectDojo(
@@ -485,7 +509,7 @@ pipeline {
                             }
                         }
 
-                        // ── Push ──────────────────────────────────────────────
+                        // ── Push ──────────────────────────────────────────
                         sh '''
                             echo "[push] Pushing versioned image ${IMAGE_FULL}"
                             docker push "${IMAGE_FULL}"
