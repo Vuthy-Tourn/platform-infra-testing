@@ -390,7 +390,8 @@ pipeline {
 
                     // ── Registry login (once) ─────────────────────────────────
                     withCredentials([usernamePassword(
-                        credentialsId: 'registry-credentials',
+                        // credentialsId: 'registry-credentials',
+                        credentialsId: 'dockerhub-credentials-micro',
                         usernameVariable: 'REGISTRY_USERNAME',
                         passwordVariable: 'REGISTRY_PASSWORD'
                     )]) {
