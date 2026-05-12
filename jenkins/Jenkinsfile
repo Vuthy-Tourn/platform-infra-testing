@@ -423,7 +423,7 @@ pipeline {
                         // ── Scan ──────────────────────────────────────────────
                         script {
                             if (params.ENABLE_TRIVY_SCAN) {
-                                def trivyPath = "home/istad/trivy/docker-compose.yml"
+                                def trivyPath = "/home/istad/trivy/docker-compose.yml"
                                 def reportPath = "${env.WORKSPACE}/trivy/reports/trivy-report.json"
 
                                 sh """
