@@ -706,13 +706,13 @@ PY""",
                 commitSha           : c[12],
                 mergedEnvJson       : c[13],
                 runtimeConfigFileName: c[14],
-                runtimeConfigFileContent: c[15] ? new String(Base64.getDecoder().decode(c[15]), 'UTF-8') : '',
-                exposePublic        : c[16]?.toBoolean(),
-                primaryPublic       : c[17]?.toBoolean(),
-                servicePath  : c[18] ?: '.',
-                serviceModule: c[19] ?: '',
-                dependsOn    : c[20] ? c[20].split('\u001f').findAll { it } : [],
-                relationshipsToken: c[21]
+                exposePublic        : c[15]?.toBoolean(),
+                primaryPublic       : c[16]?.toBoolean(),
+                servicePath         : c[17] ?: '.',
+                serviceModule       : c[18] ?: '',
+                runtimeConfigFileContent: c[19] ? new String(Base64.getDecoder().decode(c[19]), 'UTF-8') : '',
+                dependsOn           : c[20] ? c[20].split('\u001f').findAll { it } : [],
+                relationshipsToken  : c[21]
             ]
         }
     } finally {
