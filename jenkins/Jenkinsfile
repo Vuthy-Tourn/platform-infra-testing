@@ -321,15 +321,6 @@ pipeline {
 
                 // ── Docker Hub temporary registry ──────────────────────
                 REGISTRY_LOGIN_SERVER = 'docker.io'
-
-                // Example:
-                // Docker Hub image format:
-                // dockerhub-username/service-name:tag
-                //
-                // Make sure DOCKERHUB_USERNAME exists in Jenkins env,
-                // or replace it directly with your Docker Hub username.
-                IMAGE_FULL = "${REGISTRY_USERNAME}/${SERVICE_NAME}:${IMAGE_TAG}"
-                IMAGE_CACHE_REF = "${REGISTRY_USERNAME}/${SERVICE_NAME}:cache"
             }
             steps {
                 script {
@@ -412,6 +403,10 @@ pipeline {
                         usernameVariable: 'REGISTRY_USERNAME',
                         passwordVariable: 'REGISTRY_PASSWORD'
                     )]) {
+
+                        env.IMAGE_FULL = "${REGISTRY_USERNAME}/${env.SERVICE_NAME}:${env.IMAGE_TAG}"
+                        env.IMAGE_CACHE_REF = "${REGISTRY_USERNAME}/${env.SERVICE_NAME}:cache"
+
                         sh '''
                             echo "[auth] Logging in to ${REGISTRY_LOGIN_SERVER}"
                             echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_LOGIN_SERVER}" \
