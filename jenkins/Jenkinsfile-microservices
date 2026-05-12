@@ -279,6 +279,7 @@ pipeline {
                         def capturedSvc = svc
                         parallelBuilds["build-${capturedSvc.name}"] = {
                             echo "=== Building: ${capturedSvc.name} (type: ${capturedSvc.serviceType}) ==="
+                            echo "[dispatch:${capturedSvc.name}] SERVICE_PATH=${capturedSvc.servicePath ?: '.'} SERVICE_MODULE=${capturedSvc.serviceModule ?: ''} FRAMEWORK=${capturedSvc.framework ?: ''}"
                             try {
                                 def downstreamBuild = build job: params.SERVICE_JOB_NAME,
                                     wait     : true,
@@ -656,7 +657,7 @@ fields = [
     "platformHostOverride", "imageRepository", "commitSha", "mergedEnvJson",
     "runtimeConfigFileName",
     "exposePublic", "primaryPublic",
-    "sourcePath", "serviceModule"
+    "__servicePath__", "serviceModule"
 ]
 
 for svc in payload:
@@ -670,7 +671,12 @@ for svc in payload:
     else:
         relationships_json  = json.dumps(svc.get("relationships") or [], separators=(",", ":"))
         relationships_token = base64.b64encode(relationships_json.encode("utf-8")).decode("ascii")
-    values = [str(svc.get(field) or "") for field in fields]
+    values = []
+    for field in fields:
+        if field == "__servicePath__":
+            values.append(str(svc.get("sourcePath") or svc.get("path") or ""))
+        else:
+            values.append(str(svc.get(field) or ""))
     runtime_config_content = str(svc.get("runtimeConfigFileContent") or "")
     values.append(base64.b64encode(runtime_config_content.encode("utf-8")).decode("ascii"))
     values.append("\\u001f".join(str(i or "") for i in depends_on if str(i or "")))
