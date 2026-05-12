@@ -434,6 +434,7 @@ pipeline {
                                     ${CACHE_POLICY_ARG} \
                                     ${CACHE_FROM_ARG} \
                                     --build-arg BUILDKIT_INLINE_CACHE=1 \
+                                    --build-arg SERVICE_PATH="${SERVICE_PATH}" \
                                     --build-arg SERVICE_MODULE="${SERVICE_MODULE}" \
                                     -f "${DOCKERFILE_PATH}" \
                                     -t "${IMAGE_FULL}" \

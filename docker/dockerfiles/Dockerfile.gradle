@@ -1,34 +1,40 @@
 ARG JAVA_VERSION=21
 ARG GRADLE_VERSION=8.10.2
 ARG SERVICE_MODULE=""
+ARG SERVICE_PATH="."
 
 FROM gradle:${GRADLE_VERSION}-jdk${JAVA_VERSION} AS builder
 
 WORKDIR /app
 COPY . .
 
-RUN if [ -f gradlew ]; then \
+RUN BUILD_TASK="bootJar"; \
+    if [ -n "$SERVICE_MODULE" ]; then \
+      BUILD_TASK="${SERVICE_MODULE}:bootJar"; \
+    fi; \
+    if [ -f gradlew ]; then \
       chmod +x gradlew; \
-      if [ -n "$SERVICE_NAME" ] && [ -d "$SERVICE_NAME" ]; then \
-        ./gradlew :${SERVICE_NAME}:bootJar --no-daemon -x test; \
-      else \
-        ./gradlew bootJar --no-daemon -x test; \
-      fi; \
+      ./gradlew "$BUILD_TASK" --no-daemon -x test; \
     else \
-      if [ -n "$SERVICE_NAME" ] && [ -d "$SERVICE_NAME" ]; then \
-        gradle :${SERVICE_NAME}:bootJar --no-daemon -x test; \
-      else \
-        gradle bootJar --no-daemon -x test; \
-      fi; \
+      gradle "$BUILD_TASK" --no-daemon -x test; \
     fi
+
+RUN JAR_SOURCE_DIR="/app/build/libs"; \
+    if [ "$SERVICE_PATH" != "." ] && [ -d "/app/${SERVICE_PATH}/build/libs" ]; then \
+      JAR_SOURCE_DIR="/app/${SERVICE_PATH}/build/libs"; \
+    fi; \
+    JAR_FILE="$(find "${JAR_SOURCE_DIR}" -maxdepth 1 -type f -name '*.jar' ! -name '*-plain.jar' | sort | head -n1)"; \
+    if [ -z "$JAR_FILE" ]; then \
+      echo "ERROR: Could not find built JAR in ${JAR_SOURCE_DIR}" >&2; \
+      exit 1; \
+    fi; \
+    cp "$JAR_FILE" /tmp/app.jar
 
 FROM eclipse-temurin:${JAVA_VERSION}-jre-alpine
 
 WORKDIR /app
 
-ARG SERVICE_NAME=""
-
-COPY --from=builder /app/${SERVICE_NAME}/build/libs/*.jar app.jar
+COPY --from=builder /tmp/app.jar ./app.jar
 
 EXPOSE 8080
 

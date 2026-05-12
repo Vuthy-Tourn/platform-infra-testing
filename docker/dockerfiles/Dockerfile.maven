@@ -1,15 +1,31 @@
 ARG JAVA_VERSION=__JAVA_VERSION__
+ARG SERVICE_PATH="."
 FROM maven:3.9.9-eclipse-temurin-${JAVA_VERSION}-alpine AS builder
 WORKDIR /app
 COPY . .
-RUN if [ -f mvnw ]; then \
-      chmod +x mvnw && ./mvnw -B -DskipTests package; \
+RUN if [ "$SERVICE_PATH" != "." ] && [ -f "${SERVICE_PATH}/pom.xml" ]; then \
+      cd "${SERVICE_PATH}"; \
+    fi; \
+    if [ -f mvnw ] || [ -f ../mvnw ]; then \
+      if [ -f mvnw ]; then chmod +x mvnw && ./mvnw -B -DskipTests package; \
+      else chmod +x ../mvnw && ../mvnw -B -DskipTests package; fi; \
     else \
       mvn -B -DskipTests package; \
     fi
 
+RUN JAR_SOURCE_DIR="/app/target"; \
+    if [ "$SERVICE_PATH" != "." ] && [ -d "/app/${SERVICE_PATH}/target" ]; then \
+      JAR_SOURCE_DIR="/app/${SERVICE_PATH}/target"; \
+    fi; \
+    JAR_FILE="$(find "${JAR_SOURCE_DIR}" -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | sort | head -n1)"; \
+    if [ -z "$JAR_FILE" ]; then \
+      echo "ERROR: Could not find built JAR in ${JAR_SOURCE_DIR}" >&2; \
+      exit 1; \
+    fi; \
+    cp "$JAR_FILE" /tmp/app.jar
+
 FROM eclipse-temurin:${JAVA_VERSION}-jre-alpine
 WORKDIR /app
-COPY --from=builder /app/target/*.jar app.jar
+COPY --from=builder /tmp/app.jar ./app.jar
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
