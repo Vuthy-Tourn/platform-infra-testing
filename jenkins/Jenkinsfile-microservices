@@ -303,22 +303,19 @@ pipeline {
                                         booleanParam(name: 'ROLLBACK_MODE', value: params.ROLLBACK_MODE)
                                     ]
 
-                                def childNumber = downstreamBuild?.number?.toString() ?: 'unknown'
                                 def childResult = downstreamBuild?.result?.toString()?.trim() ?: 'UNKNOWN'
-                                def childUrl    = downstreamBuild?.absoluteUrl?.toString()?.trim() ?: ''
-                                def urlSuffix   = childUrl ? " · ${childUrl}" : ''
 
-                                echo "[service:${capturedSvc.name}] Child build #${childNumber} finished with ${childResult}${urlSuffix}"
+                                echo "[service:${capturedSvc.name}] Service build finished with ${childResult}"
 
                                 if (childResult != 'SUCCESS') {
-                                    failures << [name: capturedSvc.name, result: childResult, build: childNumber, url: childUrl]
+                                    failures << [name: capturedSvc.name, result: childResult]
                                     echo "[error] ${capturedSvc.name} failed with result ${childResult}"
                                 } else {
                                     echo "[service:${capturedSvc.name}] Build completed successfully"
                                 }
                             } catch (Exception e) {
                                 echo "[error] ${capturedSvc.name} failed before completion — ${e.message}"
-                                failures << [name: capturedSvc.name, result: 'ERROR', build: 'unknown', url: '', detail: e.message]
+                                failures << [name: capturedSvc.name, result: 'ERROR', detail: e.message]
                             }
                         }
                     }
@@ -327,9 +324,8 @@ pipeline {
 
                     if (failures) {
                         failures.each { f ->
-                            def urlSuffix    = f.url    ? " · ${f.url}"    : ''
                             def detailSuffix = f.detail ? " · ${f.detail}" : ''
-                            echo "[error] ${f.name} — result=${f.result} build=#${f.build}${urlSuffix}${detailSuffix}"
+                            echo "[error] ${f.name} — result=${f.result}${detailSuffix}"
                         }
                         error("Services failed: ${failures.collect { it.name }.join(', ')}")
                     }
