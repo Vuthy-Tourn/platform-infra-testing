@@ -1040,6 +1040,7 @@ def buildImageRepository(String repositoryRoot, String safeProjectName, String s
 
 def resolveCommitAndFramework(def svc, String branch, String safeProjectName, int index, String frameworkOverride) {
     def resolvedRepoUrl = svc.repoUrl?.toString()?.trim() ?: ''
+    def servicePath     = svc.servicePath?.toString()?.trim() ?: '.'
     if (resolvedRepoUrl.contains('%')) {
         resolvedRepoUrl = java.net.URLDecoder.decode(resolvedRepoUrl, 'UTF-8')
     }
@@ -1069,7 +1070,7 @@ def resolveCommitAndFramework(def svc, String branch, String safeProjectName, in
 
         if (!resolvedFramework) {
             resolvedFramework = sh(
-                script: "bash '${env.INFRA_SCRIPTS_DIR}/detect-framework.sh'",
+                script: "bash '${env.INFRA_SCRIPTS_DIR}/detect-framework.sh' '${servicePath}'",
                 returnStdout: true
             ).trim()
         }

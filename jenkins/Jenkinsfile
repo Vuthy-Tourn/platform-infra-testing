@@ -200,7 +200,7 @@ pipeline {
                         ).trim()
 
                         env.FRAMEWORK = sh(
-                            script: "bash '${scriptsDir}/detect-framework.sh'",
+                            script: "bash '${scriptsDir}/detect-framework.sh' '${env.EFFECTIVE_SERVICE_PATH}'",
                             returnStdout: true
                         ).trim()
 
@@ -331,6 +331,7 @@ pipeline {
                             set -e
 
                             SERVICE_PATH="${EFFECTIVE_SERVICE_PATH:-.}"
+                            DOCKERFILE_META_FILE=".jenkins-dockerfile-meta"
 
                             if [ ! -d "$SERVICE_PATH" ]; then
                                 echo "ERROR: SERVICE_PATH does not exist: $SERVICE_PATH"
@@ -339,24 +340,26 @@ pipeline {
 
                             SCRIPTS_DIR=""
                             for d in "$WORKSPACE/platform-infra/jenkins/scripts" "$WORKSPACE/plateform-infra/jenkins/scripts"; do
-                                if [ -f "$d/generate-dockerfile.sh" ]; then
+                                if [ -f "$d/generate-dockerfile.sh" ] && [ -f "$d/resolve-dockerfile.sh" ]; then
                                     SCRIPTS_DIR="$d"
                                     break
                                 fi
                             done
 
                             if [ -z "$SCRIPTS_DIR" ]; then
-                                echo "ERROR: generate-dockerfile.sh not found."
+                                echo "ERROR: Dockerfile support scripts not found."
                                 exit 1
                             fi
 
-                            DOCKERFILE_PATH=$(find "$SERVICE_PATH" -maxdepth 1 -iname "Dockerfile" -type f | head -1)
+                            DOCKERFILE_PATH=$(bash "${SCRIPTS_DIR}/resolve-dockerfile.sh" "$SERVICE_PATH")
 
                             if [ -n "$DOCKERFILE_PATH" ]; then
                                 echo "[dockerfile] Using user-provided Dockerfile: $DOCKERFILE_PATH"
                                 if [ "$DOCKERFILE_PATH" != "$SERVICE_PATH/Dockerfile" ]; then
                                     cp "$DOCKERFILE_PATH" "$SERVICE_PATH/Dockerfile"
                                 fi
+                                DOCKERFILE_SOURCE="user"
+                                DOCKER_BUILD_CONTEXT="$SERVICE_PATH"
                             else
                                 echo "[dockerfile] No Dockerfile found in service path: $SERVICE_PATH"
                                 echo "[dockerfile] Generating Dockerfile for ${FRAMEWORK}"
@@ -368,10 +371,20 @@ pipeline {
                                     echo "ERROR: Dockerfile generation failed in $SERVICE_PATH"
                                     exit 1
                                 fi
+
+                                DOCKERFILE_SOURCE="generated"
+                                DOCKER_BUILD_CONTEXT="."
                             fi
 
                             echo "[dockerfile] Final Dockerfile:"
                             ls -la "$SERVICE_PATH/Dockerfile"
+                            echo "[dockerfile] Build context: ${DOCKER_BUILD_CONTEXT}"
+
+                            {
+                                echo "DOCKERFILE_PATH=${SERVICE_PATH}/Dockerfile"
+                                echo "DOCKER_BUILD_CONTEXT=${DOCKER_BUILD_CONTEXT}"
+                                echo "DOCKERFILE_SOURCE=${DOCKERFILE_SOURCE}"
+                            } > "${DOCKERFILE_META_FILE}"
                         '''
                     }
 
@@ -391,6 +404,14 @@ pipeline {
                         dir('user-app') {
                             sh '''
                                 SERVICE_PATH="${EFFECTIVE_SERVICE_PATH:-.}"
+                                DOCKERFILE_META_FILE=".jenkins-dockerfile-meta"
+                                DOCKERFILE_PATH="${SERVICE_PATH}/Dockerfile"
+                                DOCKER_BUILD_CONTEXT="."
+                                DOCKERFILE_SOURCE="generated"
+
+                                if [ -f "${DOCKERFILE_META_FILE}" ]; then
+                                    . "${DOCKERFILE_META_FILE}"
+                                fi
 
                                 CACHE_FROM_ARG=""
                                 CACHE_POLICY_ARG="--no-cache"
@@ -405,18 +426,19 @@ pipeline {
                                 fi
 
                                 echo "[build] Building ${IMAGE_FULL}"
-                                echo "[build] Dockerfile: ${SERVICE_PATH}/Dockerfile"
-                                echo "[build] Context: ."
+                                echo "[build] Dockerfile: ${DOCKERFILE_PATH}"
+                                echo "[build] Context: ${DOCKER_BUILD_CONTEXT}"
+                                echo "[build] Dockerfile source: ${DOCKERFILE_SOURCE}"
 
                                 docker build \
                                     ${CACHE_POLICY_ARG} \
                                     ${CACHE_FROM_ARG} \
                                     --build-arg BUILDKIT_INLINE_CACHE=1 \
                                     --build-arg SERVICE_MODULE="${SERVICE_MODULE}" \
-                                    -f "${SERVICE_PATH}/Dockerfile" \
+                                    -f "${DOCKERFILE_PATH}" \
                                     -t "${IMAGE_FULL}" \
                                     -t "${IMAGE_CACHE_REF}" \
-                                    .
+                                    "${DOCKER_BUILD_CONTEXT}"
                             '''
                         }
 

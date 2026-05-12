@@ -9,14 +9,14 @@ COPY . .
 
 RUN if [ -f gradlew ]; then \
       chmod +x gradlew; \
-      if [ -n "$SERVICE_MODULE" ]; then \
-        ./gradlew :${SERVICE_MODULE}:bootJar --no-daemon -x test; \
+      if [ -n "$SERVICE_NAME" ] && [ -d "$SERVICE_NAME" ]; then \
+        ./gradlew :${SERVICE_NAME}:bootJar --no-daemon -x test; \
       else \
         ./gradlew bootJar --no-daemon -x test; \
       fi; \
     else \
-      if [ -n "$SERVICE_MODULE" ]; then \
-        gradle :${SERVICE_MODULE}:bootJar --no-daemon -x test; \
+      if [ -n "$SERVICE_NAME" ] && [ -d "$SERVICE_NAME" ]; then \
+        gradle :${SERVICE_NAME}:bootJar --no-daemon -x test; \
       else \
         gradle bootJar --no-daemon -x test; \
       fi; \

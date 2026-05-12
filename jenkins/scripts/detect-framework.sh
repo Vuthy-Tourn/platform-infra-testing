@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SERVICE_PATH="${1:-.}"
+
+if [[ ! -d "${SERVICE_PATH}" ]]; then
+  echo "Service path does not exist for framework detection: ${SERVICE_PATH}" >&2
+  exit 1
+fi
+
+cd "${SERVICE_PATH}"
+
 # Java / Spring Boot
-# Checks root first, then one level deep to support multi-module repos
-# where build.gradle lives inside submodule directories (e.g. api-gateway/build.gradle).
+# Checks the service root first, then one level deeper for multi-module builds
+# inside the selected service directory.
 find_gradle_file() {
   [[ -f build.gradle ]]     && echo 'build.gradle'     && return
   [[ -f build.gradle.kts ]] && echo 'build.gradle.kts' && return
