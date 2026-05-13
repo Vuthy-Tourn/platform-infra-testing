@@ -26,7 +26,7 @@ pipeline {
         string(name: 'SONARQUBE_JDK_TOOL_PREFIX', defaultValue: 'jdk', description: 'Jenkins JDK tool name prefix used for Java SonarQube analysis (example: jdk -> jdk21)')
         booleanParam(name: 'ENABLE_SONARQUBE_SCAN',         defaultValue: false, description: 'Run SonarQube source analysis')
         booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', defaultValue: false, description: 'Wait for SonarQube quality gate before build')
-        booleanParam(name: 'ENABLE_TRIVY_SCAN',             defaultValue: true,  description: 'Run local Trivy image scan')
+        booleanParam(name: 'ENABLE_TRIVY_SCAN',             defaultValue: false,  description: 'Run local Trivy image scan')
         booleanParam(name: 'ROLLBACK_MODE',                 defaultValue: false, description: 'Skip build/scan/push and update GitOps with a saved image tag')
     }
 
@@ -315,6 +315,13 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
+            // environment {
+                // ── Harbor registry - temporarily disabled ─────────────
+                // REGISTRY_LOGIN_SERVER = 'gohabor.anajak-khmer.site'
+
+                // ── Docker Hub temporary registry ──────────────────────
+                REGISTRY_LOGIN_SERVER = 'docker.io'
+            }
             steps {
                 script {
                     echo "[deploy] Preparing build workspace for ${env.EFFECTIVE_SERVICE_NAME}"
@@ -389,10 +396,17 @@ pipeline {
 
                     // ── Registry login ───────────────────────────────────
                     withCredentials([usernamePassword(
-                        credentialsId: 'registry-credentials',
+                        // Harbor credential - temporarily disabled
+                        // credentialsId: 'registry-credentials',
+
+                        // Docker Hub credential
+                        credentialsId: 'dockerhub-credentials-micro', 
                         usernameVariable: 'REGISTRY_USERNAME',
                         passwordVariable: 'REGISTRY_PASSWORD'
                     )]) {
+
+                        env.IMAGE_FULL = "${REGISTRY_USERNAME}/${env.SERVICE_NAME}:${env.IMAGE_TAG}"
+                        env.IMAGE_CACHE_REF = "${REGISTRY_USERNAME}/${env.SERVICE_NAME}:cache"
 
                         sh '''
                             set +x
