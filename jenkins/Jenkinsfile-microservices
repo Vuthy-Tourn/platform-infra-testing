@@ -303,7 +303,11 @@ pipeline {
                                         booleanParam(name: 'ROLLBACK_MODE', value: params.ROLLBACK_MODE)
                                     ]
 
+                                def childNumber = downstreamBuild?.number?.toString() ?: ''
                                 def childResult = downstreamBuild?.result?.toString()?.trim() ?: 'UNKNOWN'
+                                if (childNumber) {
+                                    echo "[[child-build service=${capturedSvc.name} job=${params.SERVICE_JOB_NAME} build=${childNumber} result=${childResult}]]"
+                                }
 
                                 echo "[service:${capturedSvc.name}] Service build finished with ${childResult}"
 
