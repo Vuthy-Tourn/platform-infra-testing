@@ -42,9 +42,9 @@ pipeline {
     }
 
     environment {
-        INFRA_REPO_URL      = credentials('infra-repo-url-micro')
-        REGISTRY_REPOSITORY = credentials('register-url-micro')
-        GITOPS_REPO_URL     = credentials('gitops-repo-url-micro')
+        INFRA_REPO_URL        = credentials('infra-repo-url-micro')
+        DOCKERHUB_NAMESPACE   = 'vuthytourn'
+        GITOPS_REPO_URL       = credentials('gitops-repo-url-micro')
     }
 
     stages {
@@ -90,10 +90,6 @@ pipeline {
                     env.SAFE_USER_ID           = slugify(params.USER_ID, 30)
                     env.SAFE_WORKSPACE_ID      = slugify(env.EFFECTIVE_WORKSPACE_ID, 30)
                     env.SAFE_STACK_NAME        = slugify(params.PROJECT_NAME?.trim() ?: 'workspace-stack', 40)
-
-                    def registryContext = resolveRegistryContext(env.REGISTRY_REPOSITORY ?: '')
-                    env.NORMALIZED_REGISTRY_REPOSITORY = registryContext.repositoryRoot
-                    env.REGISTRY_LOGIN_SERVER          = registryContext.loginServer
 
                     echo "[deploy] Workspace request received for ${services.size()} service(s)"
                     echo "[deploy] Workspace stack: ${env.SAFE_STACK_NAME}"
@@ -187,7 +183,7 @@ pipeline {
                         def serviceName     = svc.name.toString().trim()
                         def safeProjectName = slugify(serviceName, 40)
                         def imageRepository = buildImageRepository(
-                            env.NORMALIZED_REGISTRY_REPOSITORY, safeProjectName, env.SAFE_USER_ID
+                            env.DOCKERHUB_NAMESPACE, safeProjectName
                         )
 
                         def branch            = svc.branch?.toString()?.trim() ?: 'main'
@@ -1024,24 +1020,8 @@ def buildRuntimeServiceName(String stackName, String serviceName) {
     slugify("${slugify(stackName ?: '', 40)}-${slugify(serviceName ?: '', 40)}", 63)
 }
 
-def resolveRegistryContext(String rawValue) {
-    def normalizedRegistry = (rawValue ?: '')
-        .trim()
-        .replaceFirst(/^https?:\/\//, '')
-        .replaceAll(/\/+$/, '')
-
-    if (!normalizedRegistry) {
-        error('REGISTRY_REPOSITORY is required')
-    }
-    def parts = normalizedRegistry.tokenize('/')
-    if (parts.size() < 2) {
-        error('REGISTRY_REPOSITORY must include registry host and project, e.g. "harbor.example.com/platform"')
-    }
-    [loginServer: parts[0], repositoryRoot: normalizedRegistry]
-}
-
-def buildImageRepository(String repositoryRoot, String safeProjectName, String safeUserId) {
-    "${repositoryRoot}/${safeUserId}/${safeProjectName}"
+def buildImageRepository(String dockerhubNamespace, String safeProjectName) {
+    "${dockerhubNamespace}/${safeProjectName}"
 }
 
 def resolveCommitAndFramework(def svc, String branch, String safeProjectName, int index, String frameworkOverride) {

@@ -31,9 +31,10 @@ pipeline {
     }
 
     environment {
-        INFRA_REPO_URL      = credentials('infra-repo-url-micro')
-        REGISTRY_REPOSITORY = credentials('register-url-micro')
-        DOCKER_BUILDKIT     = '1'
+        INFRA_REPO_URL        = credentials('infra-repo-url-micro')
+        REGISTRY_LOGIN_SERVER = 'docker.io'
+        DOCKERHUB_NAMESPACE   = 'vuthytourn'
+        DOCKER_BUILDKIT       = '1'
     }
 
     stages {
@@ -68,15 +69,6 @@ pipeline {
                         }
                     }
 
-                    def normalizedRegistry = (env.REGISTRY_REPOSITORY ?: '')
-                        .trim()
-                        .replaceFirst(/^https?:\/\//, '')
-                        .replaceAll(/\/+$/, '')
-
-                    if (!normalizedRegistry || !normalizedRegistry.contains('/')) {
-                        error('REGISTRY_REPOSITORY must include registry host and Harbor project (example: harbor.devith.it.com/microservices-deployment)')
-                    }
-
                     env.SAFE_USER_ID = sh(
                         script: '''echo "$USER_ID" | tr '[:upper:]' '[:lower:]' | sed -E "s/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g" | cut -c1-30''',
                         returnStdout: true
@@ -100,10 +92,8 @@ pipeline {
                     echo "SERVICE_NAME=${env.EFFECTIVE_SERVICE_NAME}"
                     echo "SERVICE_PATH=${env.EFFECTIVE_SERVICE_PATH}"
 
-                    env.NORMALIZED_REGISTRY_REPOSITORY = normalizedRegistry
-                    env.REGISTRY_LOGIN_SERVER          = normalizedRegistry.tokenize('/')[0]
-                    env.IMAGE_REPOSITORY               = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_USER_ID}/${env.SAFE_PROJECT_NAME}"
-                    env.IMAGE_CACHE_REF                = "${env.IMAGE_REPOSITORY}:latest"
+                    env.IMAGE_REPOSITORY = "${env.DOCKERHUB_NAMESPACE}/${env.SAFE_SERVICE_NAME}"
+                    env.IMAGE_CACHE_REF  = "${env.IMAGE_REPOSITORY}:cache"
 
                     if (params.IMAGE_TAG?.trim()) {
                         env.IMAGE_TAG = params.IMAGE_TAG.trim()
@@ -389,7 +379,7 @@ pipeline {
 
                     // ── Registry login ───────────────────────────────────
                     withCredentials([usernamePassword(
-                        credentialsId: 'registry-credentials',
+                        credentialsId: 'dockerhub-credentials-micro',
                         usernameVariable: 'REGISTRY_USERNAME',
                         passwordVariable: 'REGISTRY_PASSWORD'
                     )]) {
