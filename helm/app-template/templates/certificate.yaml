@@ -1,0 +1,25 @@
+{{- range $service := .Values.services }}
+{{- $ctx := dict "root" $ "service" $service }}
+{{- if and $service.ingress.enabled $service.ingress.tls.enabled $service.host }}
+{{- $hostSlug := $service.host | lower | replace "." "-" | replace "*" "wildcard" | trunc 40 | trimSuffix "-" }}
+{{- $defaultTlsSecret := printf "%s-%s-tls" (include "tenant-app.serviceName" $ctx) $hostSlug }}
+{{- $clusterIssuer := default "letsencrypt-prod" (index $service.ingress.annotations "cert-manager.io/cluster-issuer") }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ default $defaultTlsSecret $service.ingress.tls.secretName | quote }}
+  namespace: {{ $.Values.workspace.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ include "tenant-app.syncWave" $ctx | quote }}
+  labels:
+    {{- include "tenant-app.labels" $ctx | nindent 4 }}
+spec:
+  secretName: {{ default $defaultTlsSecret $service.ingress.tls.secretName | quote }}
+  issuerRef:
+    name: {{ $clusterIssuer | quote }}
+    kind: ClusterIssuer
+  dnsNames:
+    - {{ $service.host | quote }}
+---
+{{- end }}
+{{- end }}
