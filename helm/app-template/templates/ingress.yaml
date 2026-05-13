@@ -17,10 +17,12 @@ metadata:
 spec:
   ingressClassName: {{ $service.ingress.className }}
   {{- if $service.ingress.tls.enabled }}
+  {{- $hostSlug := $service.host | lower | replace "." "-" | replace "*" "wildcard" | trunc 40 | trimSuffix "-" }}
+  {{- $defaultTlsSecret := printf "%s-%s-tls" (include "tenant-app.serviceName" $ctx) $hostSlug }}
   tls:
     - hosts:
-        - {{ $service.host }}
-      secretName: {{ default (printf "%s-tls" (include "tenant-app.serviceName" $ctx)) $service.ingress.tls.secretName }}
+        - {{ $service.host | quote }}
+      secretName: {{ default $defaultTlsSecret $service.ingress.tls.secretName | quote }}
   {{- end }}
   rules:
     - host: {{ $service.host }}
