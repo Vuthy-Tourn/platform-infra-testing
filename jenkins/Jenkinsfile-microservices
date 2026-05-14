@@ -27,6 +27,8 @@ pipeline {
         string(name: 'PROJECT_NAME',              defaultValue: 'workspace-stack', description: 'Workspace-level stack name written to GitOps')
         string(name: 'PLATFORM_DOMAIN',           defaultValue: 'autonomous-istad.com', description: 'Wildcard platform domain')
         string(name: 'GITOPS_BRANCH',             defaultValue: 'main', description: 'GitOps branch to update')
+        string(name: 'BACKEND_SOURCE_ARCHIVE_BASE_URL', defaultValue: '', description: 'Internal backend endpoint used to download uploaded source archives')
+        string(name: 'BACKEND_SOURCE_ARCHIVE_TOKEN',    defaultValue: '', description: 'Internal backend token used to download uploaded source archives')
         string(name: 'SERVICE_JOB_NAME',          defaultValue: 'deploy-service-test', description: 'Jenkins job name used to deploy one service')
         string(name: 'SONARQUBE_SERVER_NAME',     defaultValue: 'sonarqube', description: 'Jenkins SonarQube server configuration name')
         string(name: 'SONARQUBE_SCANNER_TOOL',    defaultValue: '', description: 'Optional Jenkins SonarScanner tool name; empty uses sonar-scanner from PATH')
@@ -282,7 +284,10 @@ pipeline {
                                     propagate: false,
                                     parameters: [
                                         string(name: 'REPO_URL', value: capturedSvc.repoUrl),
+                                        string(name: 'SOURCE_PROVIDER', value: capturedSvc.repoProvider ?: 'github'),
                                         string(name: 'BRANCH', value: capturedSvc.branch),
+                                        string(name: 'BACKEND_SOURCE_ARCHIVE_BASE_URL', value: params.BACKEND_SOURCE_ARCHIVE_BASE_URL ?: ''),
+                                        string(name: 'BACKEND_SOURCE_ARCHIVE_TOKEN', value: params.BACKEND_SOURCE_ARCHIVE_TOKEN ?: ''),
                                         string(name: 'USER_ID', value: params.USER_ID),
                                         string(name: 'WORKSPACE_ID', value: env.EFFECTIVE_WORKSPACE_ID),
                                         string(name: 'PROJECT_NAME', value: capturedSvc.name),
@@ -648,7 +653,7 @@ if not isinstance(payload, list):
     raise SystemExit("Expected a JSON array.")
 
 fields = [
-    "name", "repoUrl", "branch", "repoCredentialsId", "framework",
+    "name", "repoProvider", "repoUrl", "branch", "repoCredentialsId", "framework",
     "appPort", "imageTag", "envJson", "serviceType", "customDomain",
     "platformHostOverride", "imageRepository", "commitSha", "mergedEnvJson",
     "runtimeConfigFileName",
@@ -688,27 +693,28 @@ PY""",
             def c = line.split('\\t', -1)
             [
                 name                : c[0],
-                repoUrl             : c[1],
-                branch              : c[2],
-                repoCredentialsId   : c[3],
-                framework           : c[4],
-                appPort             : c[5],
-                imageTag            : c[6],
-                envJson             : c[7],
-                serviceType         : c[8],
-                customDomain        : c[9],
-                platformHostOverride: c[10],
-                imageRepository     : c[11],
-                commitSha           : c[12],
-                mergedEnvJson       : c[13],
-                runtimeConfigFileName: c[14],
-                exposePublic        : c[15]?.toBoolean(),
-                primaryPublic       : c[16]?.toBoolean(),
-                servicePath         : c[17] ?: '.',
-                serviceModule       : c[18] ?: '',
-                runtimeConfigFileContent: c[19] ? new String(Base64.getDecoder().decode(c[19]), 'UTF-8') : '',
-                dependsOn           : c[20] ? c[20].split('\u001f').findAll { it } : [],
-                relationshipsToken  : c[21]
+                repoProvider        : c[1] ?: 'github',
+                repoUrl             : c[2],
+                branch              : c[3],
+                repoCredentialsId   : c[4],
+                framework           : c[5],
+                appPort             : c[6],
+                imageTag            : c[7],
+                envJson             : c[8],
+                serviceType         : c[9],
+                customDomain        : c[10],
+                platformHostOverride: c[11],
+                imageRepository     : c[12],
+                commitSha           : c[13],
+                mergedEnvJson       : c[14],
+                runtimeConfigFileName: c[15],
+                exposePublic        : c[16]?.toBoolean(),
+                primaryPublic       : c[17]?.toBoolean(),
+                servicePath         : c[18] ?: '.',
+                serviceModule       : c[19] ?: '',
+                runtimeConfigFileContent: c[20] ? new String(Base64.getDecoder().decode(c[20]), 'UTF-8') : '',
+                dependsOn           : c[21] ? c[21].split('\u001f').findAll { it } : [],
+                relationshipsToken  : c[22]
             ]
         }
     } finally {
@@ -931,6 +937,7 @@ def encodeServicesForState(List services) {
     services.collect { svc ->
         [
             svc.name,
+            svc.repoProvider ?: 'github',
             svc.repoUrl,
             svc.branch,
             svc.repoCredentialsId,
@@ -963,28 +970,29 @@ def decodeServicesFromState(String state) {
         def c = line.split('\t', -1).collect { decodeStateField(it) }
         [
             name                : c.size() > 0  ? c[0]  : '',
-            repoUrl             : c.size() > 1  ? c[1]  : '',
-            branch              : c.size() > 2  ? c[2]  : '',
-            repoCredentialsId   : c.size() > 3  ? c[3]  : '',
-            framework           : c.size() > 4  ? c[4]  : '',
-            appPort             : c.size() > 5  ? c[5]  : '',
-            imageTag            : c.size() > 6  ? c[6]  : '',
-            envJson             : c.size() > 7  ? c[7]  : '',
-            serviceType         : c.size() > 8  ? c[8]  : '',
-            customDomain        : c.size() > 9  ? c[9]  : '',
-            platformHostOverride: c.size() > 10 ? c[10] : '',
-            imageRepository     : c.size() > 11 ? c[11] : '',
-            commitSha           : c.size() > 12 ? c[12] : '',
-            mergedEnvJson       : c.size() > 13 ? c[13] : '',
-            runtimeConfigFileName: c.size() > 14 ? c[14] : '',
-            runtimeConfigFileContent: c.size() > 15 && c[15] ? new String(Base64.getDecoder().decode(c[15]), 'UTF-8') : '',
-            servicePath  : c.size() > 16 && c[16] ? c[16] : '.',
-            serviceModule: c.size() > 17 ? c[17] : '',
-            dependsOn    : (c.size() > 18 && c[18]) ? c[18].split('\u001f').findAll { it } : [],
-            relationshipsToken: c.size() > 19 ? c[19] : '',
-            syncWave     : c.size() > 20 ? c[20] : '0',
-            exposePublic : c.size() > 21 ? c[21].toBoolean() : false,
-            primaryPublic: c.size() > 22 ? c[22].toBoolean() : false
+            repoProvider        : c.size() > 1  ? c[1]  : 'github',
+            repoUrl             : c.size() > 2  ? c[2]  : '',
+            branch              : c.size() > 3  ? c[3]  : '',
+            repoCredentialsId   : c.size() > 4  ? c[4]  : '',
+            framework           : c.size() > 5  ? c[5]  : '',
+            appPort             : c.size() > 6  ? c[6]  : '',
+            imageTag            : c.size() > 7  ? c[7]  : '',
+            envJson             : c.size() > 8  ? c[8]  : '',
+            serviceType         : c.size() > 9  ? c[9]  : '',
+            customDomain        : c.size() > 10 ? c[10] : '',
+            platformHostOverride: c.size() > 11 ? c[11] : '',
+            imageRepository     : c.size() > 12 ? c[12] : '',
+            commitSha           : c.size() > 13 ? c[13] : '',
+            mergedEnvJson       : c.size() > 14 ? c[14] : '',
+            runtimeConfigFileName: c.size() > 15 ? c[15] : '',
+            runtimeConfigFileContent: c.size() > 16 && c[16] ? new String(Base64.getDecoder().decode(c[16]), 'UTF-8') : '',
+            servicePath  : c.size() > 17 && c[17] ? c[17] : '.',
+            serviceModule: c.size() > 18 ? c[18] : '',
+            dependsOn    : (c.size() > 19 && c[19]) ? c[19].split('\u001f').findAll { it } : [],
+            relationshipsToken: c.size() > 20 ? c[20] : '',
+            syncWave     : c.size() > 21 ? c[21] : '0',
+            exposePublic : c.size() > 22 ? c[22].toBoolean() : false,
+            primaryPublic: c.size() > 23 ? c[23].toBoolean() : false
         ]
     }
 }
@@ -1025,6 +1033,7 @@ def buildImageRepository(String dockerhubNamespace, String safeProjectName) {
 }
 
 def resolveCommitAndFramework(def svc, String branch, String safeProjectName, int index, String frameworkOverride) {
+    def sourceProvider  = svc.repoProvider?.toString()?.trim()?.toLowerCase() ?: 'github'
     def resolvedRepoUrl = svc.repoUrl?.toString()?.trim() ?: ''
     def servicePath     = svc.servicePath?.toString()?.trim() ?: '.'
     if (resolvedRepoUrl.contains('%')) {
@@ -1034,6 +1043,16 @@ def resolveCommitAndFramework(def svc, String branch, String safeProjectName, in
     def resolvedCommitSha = ''
     def resolvedFramework = frameworkOverride
     def resolvedBranch    = branch
+
+    if (sourceProvider == 'upload') {
+        def archiveName = resolvedRepoUrl.tokenize('/').last()
+        def archiveHash = archiveName?.tokenize('-')?.first()
+        resolvedCommitSha = (archiveHash ?: Integer.toHexString(Math.abs(resolvedRepoUrl.hashCode()))).take(12)
+        if (!resolvedFramework) {
+            error("Service '${svc.name}' is missing a detected framework for uploaded source deployment")
+        }
+        return [commitSha: resolvedCommitSha, framework: resolvedFramework, branch: 'upload']
+    }
 
     dir("service-plan/${index}-${safeProjectName}") {
         resolvedBranch = checkoutRepoWithBranchFallback(

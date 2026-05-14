@@ -11,7 +11,10 @@ pipeline {
 
     parameters {
         string(name: 'REPO_URL',                  defaultValue: '', description: 'Git repository URL from user (GitHub/GitLab)')
+        string(name: 'SOURCE_PROVIDER',           defaultValue: 'github', description: 'Source provider or mode (github, gitlab, upload)')
         string(name: 'BRANCH',                    defaultValue: 'main', description: 'Git branch to build')
+        string(name: 'BACKEND_SOURCE_ARCHIVE_BASE_URL', defaultValue: '', description: 'Internal backend endpoint used to download uploaded source archives')
+        string(name: 'BACKEND_SOURCE_ARCHIVE_TOKEN',    defaultValue: '', description: 'Internal backend token used to download uploaded source archives')
         string(name: 'USER_ID',                   defaultValue: '', description: 'Tenant user id')
         string(name: 'WORKSPACE_ID',              defaultValue: '', description: 'Workspace id/slug for GitOps path partitioning and Kubernetes namespace')
         string(name: 'PROJECT_NAME',              defaultValue: '', description: 'Project slug')
@@ -140,22 +143,57 @@ pipeline {
                 dir('user-app') {
                     deleteDir()
                     script {
-                        env.NORMALIZED_REPO_URL = params.REPO_URL
-                        if (params.REPO_URL?.contains('%')) {
-                            try {
-                                env.NORMALIZED_REPO_URL = java.net.URLDecoder.decode(params.REPO_URL, 'UTF-8')
-                            } catch (Exception ignored) {
-                                echo 'Could not decode REPO_URL — using original value.'
+                        def sourceProvider = params.SOURCE_PROVIDER?.trim()?.toLowerCase() ?: 'github'
+                        if (sourceProvider == 'upload') {
+                            if (!params.BACKEND_SOURCE_ARCHIVE_BASE_URL?.trim()) {
+                                error('BACKEND_SOURCE_ARCHIVE_BASE_URL is required for uploaded source deployment')
                             }
+                            if (!params.BACKEND_SOURCE_ARCHIVE_TOKEN?.trim()) {
+                                error('BACKEND_SOURCE_ARCHIVE_TOKEN is required for uploaded source deployment')
+                            }
+
+                            env.APP_COMMIT_SHA = deriveUploadCommitSha(params.REPO_URL)
+                            env.RESOLVED_APP_BRANCH = 'upload'
+
+                            withEnv([
+                                "UPLOAD_SOURCE_URI=${params.REPO_URL}",
+                                "UPLOAD_SOURCE_BASE_URL=${params.BACKEND_SOURCE_ARCHIVE_BASE_URL}",
+                                "UPLOAD_SOURCE_TOKEN=${params.BACKEND_SOURCE_ARCHIVE_TOKEN}"
+                            ]) {
+                                sh '''
+                                    set -e
+                                    set +x
+
+                                    curl --fail --silent --show-error --location \
+                                        --get \
+                                        --data-urlencode "uri=${UPLOAD_SOURCE_URI}" \
+                                        -H "Authorization: Bearer ${UPLOAD_SOURCE_TOKEN}" \
+                                        "${UPLOAD_SOURCE_BASE_URL}" \
+                                        -o source.zip
+
+                                    unzip -q source.zip
+                                    rm -f source.zip
+                                '''
+                            }
+                        } else {
+                            env.NORMALIZED_REPO_URL = params.REPO_URL
+                            if (params.REPO_URL?.contains('%')) {
+                                try {
+                                    env.NORMALIZED_REPO_URL = java.net.URLDecoder.decode(params.REPO_URL, 'UTF-8')
+                                } catch (Exception ignored) {
+                                    echo 'Could not decode REPO_URL — using original value.'
+                                }
+                            }
+
+                            env.RESOLVED_APP_BRANCH = checkoutRepoWithBranchFallback(
+                                env.NORMALIZED_REPO_URL,
+                                params.REPO_CREDENTIALS_ID?.trim() ?: '',
+                                params.BRANCH?.trim() ?: 'main'
+                            )
+
+                            env.APP_COMMIT_SHA = sh(script: 'git rev-parse --short=12 HEAD', returnStdout: true).trim()
                         }
 
-                        env.RESOLVED_APP_BRANCH = checkoutRepoWithBranchFallback(
-                            env.NORMALIZED_REPO_URL,
-                            params.REPO_CREDENTIALS_ID?.trim() ?: '',
-                            params.BRANCH?.trim() ?: 'main'
-                        )
-
-                        env.APP_COMMIT_SHA = sh(script: 'git rev-parse --short=12 HEAD', returnStdout: true).trim()
                         if (!env.IMAGE_TAG?.trim()) {
                             env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.APP_COMMIT_SHA}"
                         }
@@ -541,6 +579,16 @@ def buildRepoBranchCandidates(String requestedBranch) {
     if (normalized == 'main')        { candidates << 'master' }
     else if (normalized == 'master') { candidates << 'main' }
     return candidates.unique()
+}
+
+def deriveUploadCommitSha(String archiveUri) {
+    def normalized = archiveUri?.toString()?.trim() ?: ''
+    if (!normalized) {
+        return Integer.toHexString(Math.abs('upload'.hashCode())).take(12)
+    }
+    def archiveName = normalized.tokenize('/').last()
+    def archiveHash = archiveName?.tokenize('-')?.first()
+    return (archiveHash ?: Integer.toHexString(Math.abs(normalized.hashCode()))).take(12)
 }
 
 def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String requestedBranch) {
