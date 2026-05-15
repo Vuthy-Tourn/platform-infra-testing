@@ -293,6 +293,7 @@ pipeline {
                                         string(name: 'PROJECT_NAME', value: capturedSvc.name),
                                         string(name: 'SERVICE_NAME', value: capturedSvc.name),
                                         string(name: 'SERVICE_PATH', value: capturedSvc.servicePath ?: capturedSvc.name),
+                                        string(name: 'SERVICE_MODULE', value: capturedSvc.serviceModule ?: ''),
                                         string(name: 'FRAMEWORK', value: capturedSvc.framework),
                                         string(name: 'IMAGE_TAG', value: capturedSvc.imageTag),
                                         string(name: 'REPO_CREDENTIALS_ID', value: capturedSvc.repoCredentialsId),

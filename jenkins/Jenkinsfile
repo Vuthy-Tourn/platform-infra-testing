@@ -20,6 +20,7 @@ pipeline {
         string(name: 'PROJECT_NAME',              defaultValue: '', description: 'Project slug')
         string(name: 'SERVICE_NAME',              defaultValue: '', description: 'Microservice name')
         string(name: 'SERVICE_PATH',              defaultValue: '.', description: 'Path to service inside repo. Use . for multi-repo')
+        string(name: 'SERVICE_MODULE',            defaultValue: '', description: 'Optional Gradle module path for multi-module builds')
         string(name: 'APP_NAME',                  defaultValue: '', description: 'Legacy alias for PROJECT_NAME')
         string(name: 'IMAGE_TAG',                 defaultValue: '', description: 'Optional image tag provided by backend (deploy or rollback)')
         string(name: 'FRAMEWORK',                 defaultValue: '', description: 'Optional framework override provided by backend')
@@ -360,6 +361,7 @@ pipeline {
 
                             SERVICE_PATH="${EFFECTIVE_SERVICE_PATH:-.}"
                             DOCKERFILE_META_FILE=".jenkins-dockerfile-meta"
+                            SERVICE_MODULE="${SERVICE_MODULE:-}"
 
                             if [ ! -d "$SERVICE_PATH" ]; then
                                 echo "ERROR: SERVICE_PATH does not exist: $SERVICE_PATH"
@@ -402,6 +404,9 @@ pipeline {
 
                                 DOCKERFILE_SOURCE="generated"
                                 DOCKER_BUILD_CONTEXT="."
+                                if [ -n "$SERVICE_PATH" ] && [ "$SERVICE_PATH" != "." ] && [ -z "$SERVICE_MODULE" ]; then
+                                    DOCKER_BUILD_CONTEXT="$SERVICE_PATH"
+                                fi
                             fi
 
                             echo "[dockerfile] Final Dockerfile ready at $SERVICE_PATH/Dockerfile"
@@ -456,7 +461,9 @@ pipeline {
                                     echo "[cache] No cache image — building from scratch"
                                 fi
 
-                                if printf '%s' "${FRAMEWORK:-}" | tr '[:upper:]' '[:lower:]' | grep -q 'gradle'; then
+                                if [ -n "${SERVICE_MODULE:-}" ]; then
+                                    EFFECTIVE_SERVICE_MODULE="${SERVICE_MODULE}"
+                                elif printf '%s' "${FRAMEWORK:-}" | tr '[:upper:]' '[:lower:]' | grep -q 'gradle'; then
                                     if [ -n "${SERVICE_PATH}" ] && [ "${SERVICE_PATH}" != "." ]; then
                                         EFFECTIVE_SERVICE_MODULE=":$(printf '%s' "${SERVICE_PATH}" | sed 's#^\\./##; s#/$##; s#/#:#g')"
                                     fi
