@@ -143,8 +143,8 @@ pipeline {
                 dir('user-app') {
                     deleteDir()
                     script {
-                        def sourceProvider = params.SOURCE_PROVIDER?.trim()?.toLowerCase() ?: 'github'
-                        if (sourceProvider == 'upload') {
+                        def sourceProvider = normalizeSourceProvider(params.SOURCE_PROVIDER, params.REPO_URL)
+                        if (isUploadedSourceProvider(sourceProvider)) {
                             if (!params.BACKEND_SOURCE_ARCHIVE_BASE_URL?.trim()) {
                                 error('BACKEND_SOURCE_ARCHIVE_BASE_URL is required for uploaded source deployment')
                             }
@@ -589,6 +589,25 @@ def deriveUploadCommitSha(String archiveUri) {
     def archiveName = normalized.tokenize('/').last()
     def archiveHash = archiveName?.tokenize('-')?.first()
     return (archiveHash ?: Integer.toHexString(Math.abs(normalized.hashCode()))).take(12)
+}
+
+def normalizeSourceProvider(def rawProvider, def repoUrl) {
+    def provider = rawProvider?.toString()?.trim()?.toLowerCase() ?: ''
+    if (isUploadedSourceProvider(provider)) {
+        return 'upload'
+    }
+
+    def normalizedRepoUrl = repoUrl?.toString()?.trim()?.toLowerCase() ?: ''
+    if (normalizedRepoUrl.startsWith('s3://') || normalizedRepoUrl.startsWith('local://') || normalizedRepoUrl.endsWith('.zip')) {
+        return 'upload'
+    }
+
+    return provider ?: 'github'
+}
+
+def isUploadedSourceProvider(def provider) {
+    def normalized = provider?.toString()?.trim()?.toLowerCase() ?: ''
+    return normalized in ['upload', 'local', 'zip']
 }
 
 def checkoutRepoWithBranchFallback(String repoUrl, String credentialsId, String requestedBranch) {

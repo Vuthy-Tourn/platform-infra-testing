@@ -284,7 +284,7 @@ pipeline {
                                     propagate: false,
                                     parameters: [
                                         string(name: 'REPO_URL', value: capturedSvc.repoUrl),
-                                        string(name: 'SOURCE_PROVIDER', value: capturedSvc.repoProvider ?: 'github'),
+                                        string(name: 'SOURCE_PROVIDER', value: normalizeSourceProvider(capturedSvc.repoProvider, capturedSvc.repoUrl)),
                                         string(name: 'BRANCH', value: capturedSvc.branch),
                                         string(name: 'BACKEND_SOURCE_ARCHIVE_BASE_URL', value: params.BACKEND_SOURCE_ARCHIVE_BASE_URL ?: ''),
                                         string(name: 'BACKEND_SOURCE_ARCHIVE_TOKEN', value: params.BACKEND_SOURCE_ARCHIVE_TOKEN ?: ''),
@@ -1032,8 +1032,27 @@ def buildImageRepository(String dockerhubNamespace, String safeProjectName) {
     "${dockerhubNamespace}/${safeProjectName}"
 }
 
+def normalizeSourceProvider(def rawProvider, def repoUrl) {
+    def provider = rawProvider?.toString()?.trim()?.toLowerCase() ?: ''
+    if (isUploadedSourceProvider(provider)) {
+        return 'upload'
+    }
+
+    def normalizedRepoUrl = repoUrl?.toString()?.trim()?.toLowerCase() ?: ''
+    if (normalizedRepoUrl.startsWith('s3://') || normalizedRepoUrl.startsWith('local://') || normalizedRepoUrl.endsWith('.zip')) {
+        return 'upload'
+    }
+
+    return provider ?: 'github'
+}
+
+def isUploadedSourceProvider(def provider) {
+    def normalized = provider?.toString()?.trim()?.toLowerCase() ?: ''
+    return normalized in ['upload', 'local', 'zip']
+}
+
 def resolveCommitAndFramework(def svc, String branch, String safeProjectName, int index, String frameworkOverride) {
-    def sourceProvider  = svc.repoProvider?.toString()?.trim()?.toLowerCase() ?: 'github'
+    def sourceProvider  = normalizeSourceProvider(svc.repoProvider, svc.repoUrl)
     def resolvedRepoUrl = svc.repoUrl?.toString()?.trim() ?: ''
     def servicePath     = svc.servicePath?.toString()?.trim() ?: '.'
     if (resolvedRepoUrl.contains('%')) {
@@ -1044,7 +1063,7 @@ def resolveCommitAndFramework(def svc, String branch, String safeProjectName, in
     def resolvedFramework = frameworkOverride
     def resolvedBranch    = branch
 
-    if (sourceProvider == 'upload') {
+    if (isUploadedSourceProvider(sourceProvider)) {
         def archiveName = resolvedRepoUrl.tokenize('/').last()
         def archiveHash = archiveName?.tokenize('-')?.first()
         resolvedCommitSha = (archiveHash ?: Integer.toHexString(Math.abs(resolvedRepoUrl.hashCode()))).take(12)
