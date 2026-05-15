@@ -3,7 +3,14 @@ ARG GRADLE_VERSION=8.10.2
 ARG SERVICE_MODULE=""
 ARG SERVICE_PATH="."
 
-FROM gradle:${GRADLE_VERSION}-jdk${JAVA_VERSION} AS builder
+FROM eclipse-temurin:${JAVA_VERSION}-jdk-alpine AS builder
+
+RUN apk add --no-cache curl unzip
+
+RUN curl -fsSL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o /tmp/gradle.zip \
+    && unzip -q /tmp/gradle.zip -d /opt \
+    && ln -sf "/opt/gradle-${GRADLE_VERSION}/bin/gradle" /usr/local/bin/gradle \
+    && rm -f /tmp/gradle.zip
 
 WORKDIR /app
 COPY . .
