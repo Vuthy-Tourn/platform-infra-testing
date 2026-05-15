@@ -167,7 +167,7 @@ pipeline {
                                     curl --fail --silent --show-error --location \
                                         --get \
                                         --data-urlencode "uri=${UPLOAD_SOURCE_URI}" \
-                                        -H "Authorization: Bearer ${UPLOAD_SOURCE_TOKEN}" \
+                                        -H "X-Source-Archive-Token: ${UPLOAD_SOURCE_TOKEN}" \
                                         "${UPLOAD_SOURCE_BASE_URL}" \
                                         -o source.zip
 
