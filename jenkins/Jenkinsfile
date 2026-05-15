@@ -448,6 +448,18 @@ pipeline {
                                     . "./${DOCKERFILE_META_FILE}"
                                 fi
 
+                                if [ "${DOCKER_BUILD_CONTEXT}" = "." ] && \
+                                   [ "${DOCKERFILE_SOURCE}" = "generated" ] && \
+                                   [ -n "${SERVICE_PATH}" ] && \
+                                   [ "${SERVICE_PATH}" != "." ] && \
+                                   [ -z "${SERVICE_MODULE:-}" ] && \
+                                   [ ! -f "settings.gradle" ] && \
+                                   [ ! -f "settings.gradle.kts" ] && \
+                                   [ ! -f "build.gradle" ] && \
+                                   [ ! -f "build.gradle.kts" ]; then
+                                    DOCKER_BUILD_CONTEXT="${SERVICE_PATH}"
+                                fi
+
                                 CACHE_FROM_ARG=""
                                 CACHE_POLICY_ARG="--no-cache"
                                 EFFECTIVE_SERVICE_MODULE=""
@@ -461,9 +473,18 @@ pipeline {
                                     echo "[cache] No cache image — building from scratch"
                                 fi
 
+                                ROOT_HAS_GRADLE_BUILD="false"
+                                if [ -f "settings.gradle" ] || \
+                                   [ -f "settings.gradle.kts" ] || \
+                                   [ -f "build.gradle" ] || \
+                                   [ -f "build.gradle.kts" ]; then
+                                    ROOT_HAS_GRADLE_BUILD="true"
+                                fi
+
                                 if [ -n "${SERVICE_MODULE:-}" ]; then
                                     EFFECTIVE_SERVICE_MODULE="${SERVICE_MODULE}"
-                                elif printf '%s' "${FRAMEWORK:-}" | tr '[:upper:]' '[:lower:]' | grep -q 'gradle'; then
+                                elif printf '%s' "${FRAMEWORK:-}" | tr '[:upper:]' '[:lower:]' | grep -q 'gradle' && \
+                                     [ "${ROOT_HAS_GRADLE_BUILD}" = "true" ]; then
                                     if [ -n "${SERVICE_PATH}" ] && [ "${SERVICE_PATH}" != "." ]; then
                                         EFFECTIVE_SERVICE_MODULE=":$(printf '%s' "${SERVICE_PATH}" | sed 's#^\\./##; s#/$##; s#/#:#g')"
                                     fi
