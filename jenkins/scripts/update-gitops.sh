@@ -373,8 +373,10 @@ create_application_manifest() {
   local sync_wave="${12:-0}"
   local manifest_repo
   local allow_empty_block=""
+  local project_label
 
   manifest_repo="$(sanitize_repo_url_for_manifest "${gitops_repo}")"
+  project_label="$(slugify "${project_name}" 63)"
   if [[ "${operation}" == "destroy" ]]; then
     allow_empty_block="      allowEmpty: true"
   fi
@@ -391,7 +393,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "${sync_wave}"
   labels:
     app.kubernetes.io/managed-by: argocd
-    platform.devops/project-name: "${project_name}"
+    platform.devops/project-name: "${project_label}"
 spec:
   project: "default"
   destination:
