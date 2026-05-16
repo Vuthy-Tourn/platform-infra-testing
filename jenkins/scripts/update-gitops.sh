@@ -103,17 +103,6 @@ helmCharts:
 YAML
 }
 
-create_workspace_bootstrap_kustomization() {
-  local file="$1"
-
-  cat > "${file}" <<YAML
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - namespace.yaml
-YAML
-}
-
 create_empty_kustomization() {
   local file="$1"
 
@@ -427,16 +416,14 @@ commit_and_push() {
   local project_path="$3"
   local shared_chart_root="$4"
   local application_path="$5"
-  local workspace_bootstrap_path="$6"
-  local workspace_application_path="$7"
-  local commit_message="$8"
+  local commit_message="$6"
 
   (
     cd "${repo_dir}"
     git config user.email "jenkins@platform.local"
     git config user.name "Jenkins CI"
 
-    git add "${project_path}" "${shared_chart_root}" "${application_path}" "${workspace_bootstrap_path}" "${workspace_application_path}"
+    git add "${project_path}" "${shared_chart_root}" "${application_path}"
 
     if git diff --cached --quiet; then
       echo "No GitOps changes required."
@@ -608,13 +595,6 @@ fi
 APP_ROOT="apps/${SAFE_WORKSPACE_ID}/${SAFE_USER_ID}/${SAFE_PROJECT_NAME}"
 APPLICATION_ROOT="applications/${SAFE_WORKSPACE_ID}/${SAFE_USER_ID}"
 APPLICATION_FILE="${GITOPS_DIR}/${APPLICATION_ROOT}/${SAFE_PROJECT_NAME}.yaml"
-WORKSPACE_BOOTSTRAP_NAME="_workspace"
-WORKSPACE_BOOTSTRAP_APP_NAME="$(slugify "${SAFE_WORKSPACE_ID}-${SAFE_USER_ID}-workspace" 55)"
-WORKSPACE_BOOTSTRAP_ROOT="apps/${SAFE_WORKSPACE_ID}/${SAFE_USER_ID}/${WORKSPACE_BOOTSTRAP_NAME}"
-WORKSPACE_BOOTSTRAP_DIR="${GITOPS_DIR}/${WORKSPACE_BOOTSTRAP_ROOT}"
-WORKSPACE_BOOTSTRAP_FILE="${GITOPS_DIR}/${APPLICATION_ROOT}/${WORKSPACE_BOOTSTRAP_NAME}.yaml"
-WORKSPACE_BOOTSTRAP_KUSTOMIZATION_FILE="${WORKSPACE_BOOTSTRAP_DIR}/kustomization.yaml"
-WORKSPACE_BOOTSTRAP_NAMESPACE_FILE="${WORKSPACE_BOOTSTRAP_DIR}/namespace.yaml"
 WORKSPACE_DIR="${GITOPS_DIR}/${APP_ROOT}"
 VALUES_FILE="${WORKSPACE_DIR}/values.yaml"
 KUSTOMIZATION_FILE="${WORKSPACE_DIR}/kustomization.yaml"
@@ -624,10 +604,11 @@ CHART_TARGET_DIR="${GITOPS_DIR}/${SHARED_CHART_ROOT}/app-template"
 CHART_SOURCE_DIR="${INFRA_ROOT_DIR}/${CHART_PATH}"
 COMMIT_MESSAGE="${OPERATION}(${SAFE_WORKSPACE_ID}/${SAFE_USER_ID}/${SAFE_PROJECT_NAME}): build=${BUILD_NUMBER}"
 
-mkdir -p "${WORKSPACE_DIR}" "${WORKSPACE_BOOTSTRAP_DIR}" "${GITOPS_DIR}/${APPLICATION_ROOT}"
+mkdir -p "${WORKSPACE_DIR}" "${GITOPS_DIR}/${APPLICATION_ROOT}"
 
 if [[ "${OPERATION}" == "destroy" ]]; then
   rm -f "${VALUES_FILE}" "${NAMESPACE_FILE}"
+  rm -rf "${GITOPS_DIR}/${APPLICATION_ROOT}/_workspace.yaml" "${GITOPS_DIR}/apps/${SAFE_WORKSPACE_ID}/${SAFE_USER_ID}/_workspace"
   create_empty_kustomization "${KUSTOMIZATION_FILE}"
 create_application_manifest \
   "${APPLICATION_FILE}" \
@@ -644,21 +625,7 @@ create_application_manifest \
   echo "Prepared destroy plan at ${APP_ROOT}"
 else
   copy_chart_template "${CHART_SOURCE_DIR}" "${CHART_TARGET_DIR}"
-  create_namespace_manifest "${WORKSPACE_BOOTSTRAP_NAMESPACE_FILE}" "${NAMESPACE}" "${SAFE_USER_ID}" "${SAFE_WORKSPACE_ID}"
-  create_workspace_bootstrap_kustomization "${WORKSPACE_BOOTSTRAP_KUSTOMIZATION_FILE}"
-  create_application_manifest \
-    "${WORKSPACE_BOOTSTRAP_FILE}" \
-    "${WORKSPACE_BOOTSTRAP_APP_NAME}" \
-    "${WORKSPACE_BOOTSTRAP_NAME}" \
-    "${NAMESPACE}" \
-    "${GITOPS_REPO}" \
-    "${GITOPS_BRANCH}" \
-    "${WORKSPACE_BOOTSTRAP_ROOT}" \
-    "${INFRA_REPO}" \
-    "${INFRA_REVISION}" \
-    "workspace-bootstrap" \
-    "deploy" \
-    "-1"
+  rm -rf "${GITOPS_DIR}/${APPLICATION_ROOT}/_workspace.yaml" "${GITOPS_DIR}/apps/${SAFE_WORKSPACE_ID}/${SAFE_USER_ID}/_workspace"
   rm -f "${NAMESPACE_FILE}"
   create_values_file "${VALUES_FILE}" "${SAFE_WORKSPACE_ID}" "${SAFE_USER_ID}" "${NAMESPACE}" "${SAFE_PROJECT_NAME}" "${PLATFORM_DOMAIN}" "${SERVICES_JSON}"
 
@@ -685,7 +652,7 @@ fi
 
 if [[ "${GITOPS_REPO}" =~ ^git@|^ssh:// ]]; then
   GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no" \
-    commit_and_push "${GITOPS_DIR}" "${GITOPS_BRANCH}" "${APP_ROOT}" "${SHARED_CHART_ROOT}" "${APPLICATION_ROOT}" "${WORKSPACE_BOOTSTRAP_ROOT}" "${APPLICATION_ROOT}/${WORKSPACE_BOOTSTRAP_NAME}.yaml" "${COMMIT_MESSAGE}"
+    commit_and_push "${GITOPS_DIR}" "${GITOPS_BRANCH}" "${APP_ROOT}" "${SHARED_CHART_ROOT}" "${APPLICATION_ROOT}" "${COMMIT_MESSAGE}"
 else
-  commit_and_push "${GITOPS_DIR}" "${GITOPS_BRANCH}" "${APP_ROOT}" "${SHARED_CHART_ROOT}" "${APPLICATION_ROOT}" "${WORKSPACE_BOOTSTRAP_ROOT}" "${APPLICATION_ROOT}/${WORKSPACE_BOOTSTRAP_NAME}.yaml" "${COMMIT_MESSAGE}"
+  commit_and_push "${GITOPS_DIR}" "${GITOPS_BRANCH}" "${APP_ROOT}" "${SHARED_CHART_ROOT}" "${APPLICATION_ROOT}" "${COMMIT_MESSAGE}"
 fi
