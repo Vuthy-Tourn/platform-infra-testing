@@ -754,12 +754,21 @@ if token:
 merged = {}
 for item in user_vars:
     if isinstance(item, dict) and item.get("name"):
-        merged[str(item["name"])] = item.get("value", "")
+        merged[str(item["name"])] = {
+            "value": item.get("value", ""),
+            "secret": bool(item.get("secret", False)),
+        }
 for item in relationships:
     if isinstance(item, dict) and item.get("name"):
-        merged[str(item["name"])] = item.get("value", "")
+        merged[str(item["name"])] = {
+            "value": item.get("value", ""),
+            "secret": False,
+        }
 
-print(json.dumps([{"name": k, "value": v} for k, v in merged.items()], separators=(",", ":")))
+print(json.dumps([
+    {"name": k, "value": v.get("value", ""), "secret": bool(v.get("secret", False))}
+    for k, v in merged.items()
+], separators=(",", ":")))
 PY""",
             returnStdout: true
         ).trim()
