@@ -863,8 +863,11 @@ def build_internal_url(target_name, rel_name):
         host = f"{target.get('runtime_name') or target_name}.{workspace_id}.svc"
     port = target.get("port") or ""
     base = f"http://{host}" + (f":{port}" if port else "")
-    if rel_name.upper() == "EUREKA_URL":
+    rel_upper = rel_name.upper()
+    if rel_upper in {"EUREKA_URL", "EUREKA_SERVER_URL", "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE"}:
         return base.rstrip("/") + "/eureka/"
+    if rel_upper == "SPRING_CONFIG_IMPORT":
+        return "optional:configserver:" + base.rstrip("/") + "/"
     return base.rstrip("/") + "/"
 
 resolved = []
