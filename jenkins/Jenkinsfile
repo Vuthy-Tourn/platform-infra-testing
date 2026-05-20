@@ -282,40 +282,87 @@ pipeline {
                 expression { return !params.ROLLBACK_MODE && params.ENABLE_SONARQUBE_SCAN }
             }
             steps {
-                dir('user-app') {
-                    script {
-                        def sonarWork = {
-                            a8sSonarScan(
-                                server       : params.SONARQUBE_SERVER_NAME?.trim() ?: 'sonarqube',
-                                scannerTool  : params.SONARQUBE_SCANNER_TOOL?.trim(),
-                                projectKey   : "${env.SAFE_WORKSPACE_ID}-${env.SAFE_PROJECT_NAME}",
-                                projectName  : env.EFFECTIVE_PROJECT_NAME,
-                                projectVersion: env.APP_COMMIT_SHA,
-                                sources      : '.',
-                                exclusions   : '**/node_modules/**,**/.next/**,**/dist/**,**/build/**,**/target/**,**/vendor/**,**/.git/**'
-                            )
-                        }
+                script {
+                    def sonarRelativeDir = normalizeServiceRelativeDir(env.EFFECTIVE_SERVICE_PATH)
+                    def sonarDir = sonarRelativeDir == '.' ? 'user-app' : "user-app/${sonarRelativeDir}"
+                    dir(sonarDir) {
+                        sh '''
+                            set -e
+                            REPO_ROOT="${WORKSPACE}/user-app"
+                            SERVICE_PATH="${EFFECTIVE_SERVICE_PATH:-.}"
+                            SERVICE_MODULE="${SERVICE_MODULE:-}"
 
-                        if (env.JAVA_TOOLCHAIN_VERSION?.trim()) {
-                            def jdkPrefix = params.SONARQUBE_JDK_TOOL_PREFIX?.trim() ?: 'jdk'
-                            def toolName  = "${jdkPrefix}${env.JAVA_TOOLCHAIN_VERSION.trim()}"
-                            def javaHome
-                            try {
-                                javaHome = tool name: toolName, type: 'hudson.model.JDK'
-                            } catch (Exception ex) {
-                                error("Java ${env.JAVA_TOOLCHAIN_VERSION} required for SonarQube but JDK tool '${toolName}' is not configured on this node.")
+                            if [ ! -f "./gradlew" ] && [ -f "${REPO_ROOT}/gradlew" ]; then
+                                ROOT_HAS_GRADLE_BUILD="false"
+                                if [ -f "${REPO_ROOT}/settings.gradle" ] || \
+                                   [ -f "${REPO_ROOT}/settings.gradle.kts" ] || \
+                                   [ -f "${REPO_ROOT}/build.gradle" ] || \
+                                   [ -f "${REPO_ROOT}/build.gradle.kts" ]; then
+                                    ROOT_HAS_GRADLE_BUILD="true"
+                                fi
+
+                                if [ -z "${SERVICE_MODULE}" ] && \
+                                   [ "${ROOT_HAS_GRADLE_BUILD}" = "true" ] && \
+                                   [ -n "${SERVICE_PATH}" ] && \
+                                   [ "${SERVICE_PATH}" != "." ]; then
+                                    SERVICE_MODULE=":$(printf '%s' "${SERVICE_PATH}" | sed 's#^\\./##; s#/$##; s#/#:#g')"
+                                fi
+
+                                if [ -n "${SERVICE_MODULE}" ]; then
+                                    chmod +x "${REPO_ROOT}/gradlew" || true
+                                    cat > ./gradlew <<EOF
+#!/bin/sh
+set -eu
+ROOT_DIR="${REPO_ROOT}"
+SERVICE_MODULE="${SERVICE_MODULE}"
+case "\${1:-}" in
+  classes|testClasses|compileJava|compileTestJava)
+    TASK="\$1"
+    shift
+    exec "\$ROOT_DIR/gradlew" "\${SERVICE_MODULE}:\${TASK}" "\$@"
+    ;;
+esac
+exec "\$ROOT_DIR/gradlew" "\$@"
+EOF
+                                    chmod +x ./gradlew
+                                    echo "[sonar] Prepared Gradle mono-repo wrapper shim for ${SERVICE_MODULE}"
+                                fi
+                            fi
+                        '''
+                        script {
+                            def sonarWork = {
+                                a8sSonarScan(
+                                    server       : params.SONARQUBE_SERVER_NAME?.trim() ?: 'sonarqube',
+                                    scannerTool  : params.SONARQUBE_SCANNER_TOOL?.trim(),
+                                    projectKey   : "${env.SAFE_WORKSPACE_ID}-${env.SAFE_PROJECT_NAME}",
+                                    projectName  : env.EFFECTIVE_PROJECT_NAME,
+                                    projectVersion: env.APP_COMMIT_SHA,
+                                    sources      : '.',
+                                    exclusions   : '**/node_modules/**,**/.next/**,**/dist/**,**/build/**,**/target/**,**/vendor/**,**/.git/**'
+                                )
                             }
-                            withEnv([
-                                "JAVA_HOME=${javaHome}",
-                                "PATH=${javaHome}/bin:${env.PATH}",
-                                "ORG_GRADLE_JAVA_HOME=${javaHome}",
-                                "ORG_GRADLE_JAVA_INSTALLATIONS_PATHS=${javaHome}"
-                            ]) {
-                                sh 'java -version; command -v javac >/dev/null 2>&1 && javac -version || true'
+
+                            if (env.JAVA_TOOLCHAIN_VERSION?.trim()) {
+                                def jdkPrefix = params.SONARQUBE_JDK_TOOL_PREFIX?.trim() ?: 'jdk'
+                                def toolName  = "${jdkPrefix}${env.JAVA_TOOLCHAIN_VERSION.trim()}"
+                                def javaHome
+                                try {
+                                    javaHome = tool name: toolName, type: 'hudson.model.JDK'
+                                } catch (Exception ex) {
+                                    error("Java ${env.JAVA_TOOLCHAIN_VERSION} required for SonarQube but JDK tool '${toolName}' is not configured on this node.")
+                                }
+                                withEnv([
+                                    "JAVA_HOME=${javaHome}",
+                                    "PATH=${javaHome}/bin:${env.PATH}",
+                                    "ORG_GRADLE_JAVA_HOME=${javaHome}",
+                                    "ORG_GRADLE_JAVA_INSTALLATIONS_PATHS=${javaHome}"
+                                ]) {
+                                    sh 'java -version; command -v javac >/dev/null 2>&1 && javac -version || true'
+                                    sonarWork()
+                                }
+                            } else {
                                 sonarWork()
                             }
-                        } else {
-                            sonarWork()
                         }
                     }
                 }
@@ -707,4 +754,15 @@ def isBranchResolutionFailure(Exception err) {
         message.contains("Couldn't find any commit") ||
         message.contains("Couldn't resolve")
     return isResolutionFailure
+}
+
+def normalizeServiceRelativeDir(String rawPath) {
+    def normalized = rawPath?.toString()?.trim()
+    if (!normalized || normalized == '.' || normalized == './') {
+        return '.'
+    }
+    normalized = normalized.replace('\\', '/')
+    normalized = normalized.replaceFirst(/^\.\/+/, '')
+    normalized = normalized.replaceFirst(/\/+$/, '')
+    return normalized ?: '.'
 }
