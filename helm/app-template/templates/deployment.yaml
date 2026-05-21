@@ -9,6 +9,7 @@
 {{- if $envJson }}
 {{- $envEntries = fromJsonArray $envJson }}
 {{- end }}
+{{- $envChecksumSource := toJson $envEntries }}
 {{- $envVars := list }}
 {{- $secretEnvVars := list }}
 {{- range $envEntry := $envEntries }}
@@ -37,6 +38,7 @@ spec:
     metadata:
       annotations:
         argocd.argoproj.io/sync-wave: {{ include "tenant-app.syncWave" $ctx | quote }}
+        platform.devops/runtime-env-checksum: {{ sha256sum $envChecksumSource | quote }}
         {{- if $hasRuntimeConfig }}
         platform.devops/runtime-config-checksum: {{ sha256sum $runtimeConfigFileContent | quote }}
         {{- end }}
