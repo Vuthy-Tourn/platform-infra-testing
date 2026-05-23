@@ -338,8 +338,8 @@ pipeline {
                                 echo "[sonar-path] sample files:"
                                 find . -maxdepth 3 -type f | sort | head -n 50
                                 echo "[sonar-path] java_count=$(find . -type f -name '*.java' | wc -l | tr -d ' ')"
-                                echo "[sonar-path] ts_count=$(find . -type f \\( -name '*.ts' -o -name '*.tsx' \\) | wc -l | tr -d ' ')"
-                                echo "[sonar-path] js_count=$(find . -type f \\( -name '*.js' -o -name '*.jsx' \\) | wc -l | tr -d ' ')"
+                                echo "[sonar-path] ts_count=$(find . -type f | grep -E '\\.(ts|tsx)$' | wc -l | tr -d ' ')"
+                                echo "[sonar-path] js_count=$(find . -type f | grep -E '\\.(js|jsx)$' | wc -l | tr -d ' ')"
                             '''
                             def sonarServer = params.SONARQUBE_SERVER_NAME?.trim() ?: 'sonarqube'
                             def sonarWork = {
