@@ -333,6 +333,23 @@ EOF
                             def sonarServer = params.SONARQUBE_SERVER_NAME?.trim() ?: 'sonarqube'
                             def sonarWork = {
                                 withSonarQubeEnv(sonarServer) {
+                                    sh '''
+                                        set +x
+                                        echo "[sonar-debug] SONAR_HOST_URL=${SONAR_HOST_URL:-missing}"
+
+                                        if [ -n "${SONAR_AUTH_TOKEN:-}" ]; then
+                                        echo "[sonar-debug] SONAR_AUTH_TOKEN=present"
+                                        else
+                                        echo "[sonar-debug] SONAR_AUTH_TOKEN=missing"
+                                        fi
+
+                                        if [ -n "${SONAR_TOKEN:-}" ]; then
+                                        echo "[sonar-debug] SONAR_TOKEN=present"
+                                        else
+                                        echo "[sonar-debug] SONAR_TOKEN=missing"
+                                        fi
+                                    '''
+
                                     String sonarHost = env.SONAR_HOST_URL?.trim()
                                     String sonarAuthToken = env.SONAR_AUTH_TOKEN?.trim()
 
@@ -344,15 +361,20 @@ EOF
                                         error("SonarQube server '${sonarServer}' did not provide SONAR_AUTH_TOKEN. Check Jenkins -> Manage Jenkins -> System -> SonarQube servers.")
                                     }
 
+                                    sh '''
+                                        set +x
+                                        curl -fsS -u "${SONAR_AUTH_TOKEN}:" "${SONAR_HOST_URL}/api/authentication/validate"
+                                    '''
+
                                     withEnv(["SONAR_TOKEN=${sonarAuthToken}"]) {
                                         a8sSonarScan(
-                                            server       : sonarServer,
-                                            scannerTool  : params.SONARQUBE_SCANNER_TOOL?.trim(),
-                                            projectKey   : "${env.SAFE_WORKSPACE_ID}-${env.SAFE_PROJECT_NAME}",
-                                            projectName  : env.EFFECTIVE_PROJECT_NAME,
+                                            server        : sonarServer,
+                                            scannerTool   : params.SONARQUBE_SCANNER_TOOL?.trim(),
+                                            projectKey    : "${env.SAFE_WORKSPACE_ID}-${env.SAFE_PROJECT_NAME}",
+                                            projectName   : env.EFFECTIVE_PROJECT_NAME,
                                             projectVersion: env.APP_COMMIT_SHA,
-                                            sources      : '.',
-                                            exclusions   : '**/node_modules/**,**/.next/**,**/dist/**,**/build/**,**/target/**,**/vendor/**,**/.git/**'
+                                            sources       : '.',
+                                            exclusions    : '**/node_modules/**,**/.next/**,**/dist/**,**/build/**,**/target/**,**/vendor/**,**/.git/**'
                                         )
                                     }
                                 }
