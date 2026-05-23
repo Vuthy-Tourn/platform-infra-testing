@@ -281,6 +281,7 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE && params.ENABLE_SONARQUBE_SCAN }
             }
+            agent { label 'master' }
             steps {
                 script {
                     def sonarRelativeDir = normalizeServiceRelativeDir(env.EFFECTIVE_SERVICE_PATH)
