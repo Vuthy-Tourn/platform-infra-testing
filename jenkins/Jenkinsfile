@@ -311,19 +311,19 @@ pipeline {
                                 if [ -n "${SERVICE_MODULE}" ]; then
                                     chmod +x "${REPO_ROOT}/gradlew" || true
                                     cat > ./gradlew <<EOF
-            #!/bin/sh
-            set -eu
-            ROOT_DIR="${REPO_ROOT}"
-            SERVICE_MODULE="${SERVICE_MODULE}"
-            case "\${1:-}" in
-            classes|testClasses|compileJava|compileTestJava)
-                TASK="\$1"
-                shift
-                exec "\$ROOT_DIR/gradlew" "\${SERVICE_MODULE}:\${TASK}" "\$@"
-                ;;
-            esac
-            exec "\$ROOT_DIR/gradlew" "\$@"
-            EOF
+#!/bin/sh
+set -eu
+ROOT_DIR="${REPO_ROOT}"
+SERVICE_MODULE="${SERVICE_MODULE}"
+case "\${1:-}" in
+classes|testClasses|compileJava|compileTestJava)
+    TASK="\$1"
+    shift
+    exec "\$ROOT_DIR/gradlew" "\${SERVICE_MODULE}:\${TASK}" "\$@"
+    ;;
+esac
+exec "\$ROOT_DIR/gradlew" "\$@"
+EOF
                                     chmod +x ./gradlew
                                     echo "[sonar] Prepared Gradle mono-repo wrapper shim for ${SERVICE_MODULE}"
                                 fi
