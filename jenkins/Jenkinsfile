@@ -330,16 +330,32 @@ EOF
                             fi
                         '''
                         script {
+                            def sonarServer = params.SONARQUBE_SERVER_NAME?.trim() ?: 'sonarqube'
                             def sonarWork = {
-                                a8sSonarScan(
-                                    server       : params.SONARQUBE_SERVER_NAME?.trim() ?: 'sonarqube',
-                                    scannerTool  : params.SONARQUBE_SCANNER_TOOL?.trim(),
-                                    projectKey   : "${env.SAFE_WORKSPACE_ID}-${env.SAFE_PROJECT_NAME}",
-                                    projectName  : env.EFFECTIVE_PROJECT_NAME,
-                                    projectVersion: env.APP_COMMIT_SHA,
-                                    sources      : '.',
-                                    exclusions   : '**/node_modules/**,**/.next/**,**/dist/**,**/build/**,**/target/**,**/vendor/**,**/.git/**'
-                                )
+                                withSonarQubeEnv(sonarServer) {
+                                    String sonarHost = env.SONAR_HOST_URL?.trim()
+                                    String sonarAuthToken = env.SONAR_AUTH_TOKEN?.trim()
+
+                                    if (!sonarHost) {
+                                        error("SonarQube server '${sonarServer}' did not provide SONAR_HOST_URL. Check Jenkins -> Manage Jenkins -> System -> SonarQube servers.")
+                                    }
+
+                                    if (!sonarAuthToken) {
+                                        error("SonarQube server '${sonarServer}' did not provide SONAR_AUTH_TOKEN. Check Jenkins -> Manage Jenkins -> System -> SonarQube servers.")
+                                    }
+
+                                    withEnv(["SONAR_TOKEN=${sonarAuthToken}"]) {
+                                        a8sSonarScan(
+                                            server       : sonarServer,
+                                            scannerTool  : params.SONARQUBE_SCANNER_TOOL?.trim(),
+                                            projectKey   : "${env.SAFE_WORKSPACE_ID}-${env.SAFE_PROJECT_NAME}",
+                                            projectName  : env.EFFECTIVE_PROJECT_NAME,
+                                            projectVersion: env.APP_COMMIT_SHA,
+                                            sources      : '.',
+                                            exclusions   : '**/node_modules/**,**/.next/**,**/dist/**,**/build/**,**/target/**,**/vendor/**,**/.git/**'
+                                        )
+                                    }
+                                }
                             }
 
                             if (env.JAVA_TOOLCHAIN_VERSION?.trim()) {
