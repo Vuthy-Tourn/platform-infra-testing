@@ -281,7 +281,6 @@ pipeline {
             when {
                 expression { return !params.ROLLBACK_MODE && params.ENABLE_SONARQUBE_SCAN }
             }
-            agent { label 'master' }
             steps {
                 script {
                     def sonarRelativeDir = normalizeServiceRelativeDir(env.EFFECTIVE_SERVICE_PATH)
@@ -312,60 +311,44 @@ pipeline {
                                 if [ -n "${SERVICE_MODULE}" ]; then
                                     chmod +x "${REPO_ROOT}/gradlew" || true
                                     cat > ./gradlew <<EOF
-#!/bin/sh
-set -eu
-ROOT_DIR="${REPO_ROOT}"
-SERVICE_MODULE="${SERVICE_MODULE}"
-case "\${1:-}" in
-  classes|testClasses|compileJava|compileTestJava)
-    TASK="\$1"
-    shift
-    exec "\$ROOT_DIR/gradlew" "\${SERVICE_MODULE}:\${TASK}" "\$@"
-    ;;
-esac
-exec "\$ROOT_DIR/gradlew" "\$@"
-EOF
+            #!/bin/sh
+            set -eu
+            ROOT_DIR="${REPO_ROOT}"
+            SERVICE_MODULE="${SERVICE_MODULE}"
+            case "\${1:-}" in
+            classes|testClasses|compileJava|compileTestJava)
+                TASK="\$1"
+                shift
+                exec "\$ROOT_DIR/gradlew" "\${SERVICE_MODULE}:\${TASK}" "\$@"
+                ;;
+            esac
+            exec "\$ROOT_DIR/gradlew" "\$@"
+            EOF
                                     chmod +x ./gradlew
                                     echo "[sonar] Prepared Gradle mono-repo wrapper shim for ${SERVICE_MODULE}"
                                 fi
                             fi
                         '''
                         script {
+                            sh '''
+                                set -e
+                                echo "[sonar-path] pwd=$(pwd)"
+                                echo "[sonar-path] service_path=${EFFECTIVE_SERVICE_PATH:-.}"
+                                echo "[sonar-path] module=${SERVICE_MODULE:-}"
+                                echo "[sonar-path] sample files:"
+                                find . -maxdepth 3 -type f | sort | head -n 50
+                                echo "[sonar-path] java_count=$(find . -type f -name '*.java' | wc -l | tr -d ' ')"
+                                echo "[sonar-path] ts_count=$(find . -type f \\( -name '*.ts' -o -name '*.tsx' \\) | wc -l | tr -d ' ')"
+                                echo "[sonar-path] js_count=$(find . -type f \\( -name '*.js' -o -name '*.jsx' \\) | wc -l | tr -d ' ')"
+                            '''
                             def sonarServer = params.SONARQUBE_SERVER_NAME?.trim() ?: 'sonarqube'
                             def sonarWork = {
                                 withSonarQubeEnv(sonarServer) {
-                                    sh '''
-                                        set +x
-                                        echo "[sonar-debug] SONAR_HOST_URL=${SONAR_HOST_URL:-missing}"
-
-                                        if [ -n "${SONAR_AUTH_TOKEN:-}" ]; then
-                                        echo "[sonar-debug] SONAR_AUTH_TOKEN=present"
-                                        else
-                                        echo "[sonar-debug] SONAR_AUTH_TOKEN=missing"
-                                        fi
-
-                                        if [ -n "${SONAR_TOKEN:-}" ]; then
-                                        echo "[sonar-debug] SONAR_TOKEN=present"
-                                        else
-                                        echo "[sonar-debug] SONAR_TOKEN=missing"
-                                        fi
-                                    '''
-
-                                    String sonarHost = env.SONAR_HOST_URL?.trim()
                                     String sonarAuthToken = env.SONAR_AUTH_TOKEN?.trim()
-
-                                    if (!sonarHost) {
-                                        error("SonarQube server '${sonarServer}' did not provide SONAR_HOST_URL. Check Jenkins -> Manage Jenkins -> System -> SonarQube servers.")
-                                    }
 
                                     if (!sonarAuthToken) {
                                         error("SonarQube server '${sonarServer}' did not provide SONAR_AUTH_TOKEN. Check Jenkins -> Manage Jenkins -> System -> SonarQube servers.")
                                     }
-
-                                    sh '''
-                                        set +x
-                                        curl -fsS -u "${SONAR_AUTH_TOKEN}:" "${SONAR_HOST_URL}/api/authentication/validate"
-                                    '''
 
                                     withEnv(["SONAR_TOKEN=${sonarAuthToken}"]) {
                                         a8sSonarScan(
