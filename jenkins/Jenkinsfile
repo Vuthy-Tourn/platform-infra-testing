@@ -505,22 +505,6 @@ EOF
                         usernameVariable: 'REGISTRY_USERNAME',
                         passwordVariable: 'REGISTRY_PASSWORD'
                     )]) {
-                        sh '''
-                        set +x
-                        echo "[registry-debug] host=${REGISTRY_LOGIN_SERVER}"
-                        echo "[registry-debug] username=${REGISTRY_USERNAME}"
-                        if [ -n "${REGISTRY_PASSWORD:-}" ]; then
-                            echo "[registry-debug] password=present"
-                        else
-                            echo "[registry-debug] password=missing"
-                        fi
-
-                        http_code=$(curl -s -o /tmp/harbor-v2.out -w "%{http_code}" \
-                            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
-                            "https://${REGISTRY_LOGIN_SERVER}/v2/")
-                        echo "[registry-debug] curl_v2_status=${http_code}"
-                        cat /tmp/harbor-v2.out || true
-                        '''
 
                         sh '''
                             set +x
