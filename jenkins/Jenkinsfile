@@ -501,7 +501,7 @@ EOF
 
                     // ── Registry login ───────────────────────────────────
                     withCredentials([usernamePassword(
-                        credentialsId: 'dockerhub-credentials-micro',
+                        credentialsId: 'registry-credentials',
                         usernameVariable: 'REGISTRY_USERNAME',
                         passwordVariable: 'REGISTRY_PASSWORD'
                     )]) {
