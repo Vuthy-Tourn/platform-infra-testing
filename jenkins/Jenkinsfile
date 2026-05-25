@@ -593,11 +593,11 @@ EOF
                         // ── Scan ──────────────────────────────────────────
                         script {
                             if (params.ENABLE_TRIVY_SCAN) {
-                                def trivyPath = "${env.WORKSPACE}/trivy/docker-compose.yml"
-                                def reportPath = "${env.WORKSPACE}/trivy/reports/trivy-report.json"
+                                def trivyPath = "/home/istad/trivy/docker-compose.yml"
+                                def reportPath = "/home/istad/trivy/reports/trivy-report.json"
 
                                  sh """
-                                    mkdir -p "${env.WORKSPACE}/trivy/reports"
+                                    mkdir -p "/home/istad/trivy/reports"
                                 """
 
                                 echo "[scan] Starting Trivy scan for ${env.IMAGE_FULL}"
@@ -626,7 +626,7 @@ EOF
 
                                 securityGate(
                                     severity: 'CRITICAL',
-                                    trivyPath: "${env.WORKSPACE}/trivy/docker-compose.yml",
+                                    trivyPath: "/home/istad/trivy/docker-compose.yml",
                                     fullImage: env.IMAGE_FULL
                                 )
                             } else {
