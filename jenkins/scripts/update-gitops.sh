@@ -145,6 +145,7 @@ create_values_file() {
 
   python3 - "$values_file" "$workspace_id" "$user_id" "$namespace" "$project_name" "$platform_domain" "$services_json" <<'PY'
 import base64
+import hashlib
 import json
 import re
 import sys
@@ -156,6 +157,28 @@ def slugify(raw: str, max_len: int = 40) -> str:
     normalized = re.sub(r'-{2,}', '-', normalized).strip('-')
     normalized = normalized or "x"
     return normalized[:max_len].rstrip("-")
+
+def short_stable_suffix(raw: str, length: int = 6) -> str:
+    normalized = slugify(raw, 255)
+    if not normalized:
+        return ""
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:length]
+
+def resolve_workspace_host_suffix(raw: str, max_len: int = 8) -> str:
+    normalized = slugify(raw, 255)
+    if not normalized:
+        return ""
+    segments = [segment for segment in normalized.split("-") if segment]
+    candidate = segments[-1] if segments else normalized
+    return slugify(candidate, max_len)
+
+def build_project_scoped_service_host(service_name: str, project_slug: str, workspace_slug: str, domain: str) -> str:
+    service_segment = slugify(service_name, 24)
+    project_segment = short_stable_suffix(project_slug, 6)
+    workspace_segment = resolve_workspace_host_suffix(workspace_slug, 8)
+    segments = [segment for segment in [service_segment, project_segment, workspace_segment] if segment]
+    host_label = slugify("-".join(segments) if segments else (service_segment or "service"), 63)
+    return f"{host_label}.{domain}" if host_label else ""
 
 def default_container_port(framework: str) -> int:
     framework = (framework or "").strip()
@@ -247,7 +270,12 @@ for svc in services:
 
     custom_domain = str(svc.get("customDomain") or "").strip()
     platform_host_override = str(svc.get("platformHostOverride") or "").strip()
-    host = custom_domain or platform_host_override or f"{slugify(name, 24)}-{workspace_id}.{platform_domain}"
+    host = custom_domain or platform_host_override or build_project_scoped_service_host(
+        name,
+        project_name,
+        workspace_id,
+        platform_domain,
+    )
     env_json = str(svc.get("mergedEnvJson") or svc.get("envJson") or "[]").strip() or "[]"
     runtime_config_file_name = str(svc.get("runtimeConfigFileName") or "").strip()
     runtime_config_file_content_b64 = str(svc.get("runtimeConfigFileContentBase64") or "").strip()
