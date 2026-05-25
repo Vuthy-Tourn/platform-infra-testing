@@ -626,7 +626,7 @@ EOF
 
                                 securityGate(
                                     severity: 'CRITICAL',
-                                    trivyPath: "${env.WORKSPACE}/trivy/docker-compose.yml"
+                                    trivyPath: "${env.WORKSPACE}/trivy/docker-compose.yml",
                                     fullImage: env.IMAGE_FULL
                                 )
                             } else {
