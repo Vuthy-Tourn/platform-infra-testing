@@ -596,8 +596,8 @@ EOF
                                 def trivyPath = "/home/istad/trivy/docker-compose.yml"
                                 def reportPath = "/home/istad/trivy/reports/trivy-report.json"
 
-                                sh """${env.WORKSPACE}
-                                    mkdir -p "/trivy/reports"
+                                 sh """
+                                    mkdir -p "${env.WORKSPACE}/trivy/reports"
                                 """
 
                                 echo "[scan] Starting Trivy scan for ${env.IMAGE_FULL}"
