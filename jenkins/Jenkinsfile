@@ -594,7 +594,7 @@ EOF
                         script {
                             if (params.ENABLE_TRIVY_SCAN) {
                                 def trivyPath = "/home/istad/trivy/docker-compose.yml"
-                                def reportPath = "${env.WORKSPACE}/trivy/reports/trivy-report.json"
+                                def reportPath = "/home/istad/trivy/reports/trivy-report.json"
 
                                 sh """
                                     mkdir -p "${env.WORKSPACE}/trivy/reports"
