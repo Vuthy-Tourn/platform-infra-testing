@@ -593,11 +593,11 @@ EOF
                         // ── Scan ──────────────────────────────────────────
                         script {
                             if (params.ENABLE_TRIVY_SCAN) {
-                                def trivyPath = "/home/istad/trivy/docker-compose.yml"
-                                def reportPath = "/home/istad/trivy/reports/trivy-report.json"
+                                def trivyPath = "${env.WORKSPACE}/trivy/docker-compose.yml"
+                                def reportPath = "${env.WORKSPACE}/trivy/reports/trivy-report.json"
 
-                                sh """
-                                    mkdir -p "${env.WORKSPACE}/trivy/reports"
+                                sh """${env.WORKSPACE}
+                                    mkdir -p "/trivy/reports"
                                 """
 
                                 echo "[scan] Starting Trivy scan for ${env.IMAGE_FULL}"
@@ -624,7 +624,11 @@ EOF
 
                                 echo "[scan] DefectDojo upload completed"
 
-                                securityGate(severity: 'CRITICAL')
+                                securityGate(
+                                    severity: 'CRITICAL',
+                                    trivyPath: "${env.WORKSPACE}/trivy/docker-compose.yml"
+                                    fullImage: env.IMAGE_FULL
+                                )
                             } else {
                                 echo '[scan] ENABLE_TRIVY_SCAN=false — skipping.'
                             }
