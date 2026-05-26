@@ -651,11 +651,21 @@ EOF
 
                                 echo "[scan] DefectDojo upload completed"
 
-                                securityGate(
-                                    severity: 'CRITICAL',
-                                    trivyPath: "/home/istad/trivy/docker-compose.yml",
-                                    fullImage: env.IMAGE_FULL
-                                )
+
+                                // security gate: fail build if any CRITICAL vulnerability found
+                                sh """
+                                    set -e
+                                    docker compose -f "${trivyPath}" exec --no-TTY trivy \
+                                      trivy image \
+                                      --cache-dir "${trivyCacheDir}" \
+                                      --timeout 10m \
+                                      --skip-version-check \
+                                      --scanners vuln \
+                                      --severity CRITICAL \
+                                      --exit-code 1 \
+                                      --no-progress \
+                                      "${env.IMAGE_FULL}"
+                                """
                             } else {
                                 echo '[scan] ENABLE_TRIVY_SCAN=false — skipping.'
                             }
