@@ -647,11 +647,11 @@ EOF
 
                                 echo "[scan] DefectDojo upload completed"
 
-                                // securityGate(
-                                //     severity: 'CRITICAL',
-                                //     trivyPath: "/home/istad/trivy/docker-compose.yml",
-                                //     fullImage: env.IMAGE_FULL
-                                // )
+                                securityGate(
+                                    severity: 'CRITICAL',
+                                    trivyPath: "/home/istad/trivy/docker-compose.yml",
+                                    fullImage: env.IMAGE_FULL
+                                )
                             } else {
                                 echo '[scan] ENABLE_TRIVY_SCAN=false — skipping.'
                             }
