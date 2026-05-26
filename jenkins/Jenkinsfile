@@ -106,7 +106,7 @@ pipeline {
 
                     env.NORMALIZED_REGISTRY_REPOSITORY = normalizedRegistry
                     env.REGISTRY_LOGIN_SERVER          = normalizedRegistry.tokenize('/')[0]
-                    env.IMAGE_REPOSITORY               = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_USER_ID}/${env.SAFE_SERVICE_NAME}"
+                    env.IMAGE_REPOSITORY               = "${env.NORMALIZED_REGISTRY_REPOSITORY}/${env.SAFE_USER_ID}/${env.SAFE_PROJECT_NAME}/${env.SAFE_SERVICE_NAME}"
                     env.IMAGE_CACHE_REF  = "${env.IMAGE_REPOSITORY}:cache"
 
                     if (params.IMAGE_TAG?.trim()) {

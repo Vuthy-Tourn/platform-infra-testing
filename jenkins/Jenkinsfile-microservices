@@ -197,6 +197,7 @@ pipeline {
                         def imageRepository = buildImageRepository(
                             env.NORMALIZED_REGISTRY_REPOSITORY,
                             env.SAFE_USER_ID,
+                            env.SAFE_STACK_NAME,
                             safeProjectName
                         )
 
@@ -302,7 +303,7 @@ pipeline {
                                         string(name: 'BACKEND_SOURCE_ARCHIVE_TOKEN', value: params.BACKEND_SOURCE_ARCHIVE_TOKEN ?: ''),
                                         string(name: 'USER_ID', value: params.USER_ID),
                                         string(name: 'WORKSPACE_ID', value: env.EFFECTIVE_WORKSPACE_ID),
-                                        string(name: 'PROJECT_NAME', value: capturedSvc.name),
+                                        string(name: 'PROJECT_NAME', value: params.PROJECT_NAME),
                                         string(name: 'SERVICE_NAME', value: capturedSvc.name),
                                         string(name: 'SERVICE_PATH', value: capturedSvc.servicePath ?: capturedSvc.name),
                                         string(name: 'SERVICE_MODULE', value: capturedSvc.serviceModule ?: ''),
@@ -1055,8 +1056,8 @@ def buildRuntimeServiceName(String stackName, String serviceName) {
     slugify("${slugify(stackName ?: '', 40)}-${slugify(serviceName ?: '', 40)}", 63)
 }
 
-def buildImageRepository(String normalizedRegistryRepository, String safeUserId, String safeProjectName) {
-    "${normalizedRegistryRepository}/${safeUserId}/${safeProjectName}"
+def buildImageRepository(String normalizedRegistryRepository, String safeUserId, String safeProjectName, String safeServiceName) {
+    "${normalizedRegistryRepository}/${safeUserId}/${safeProjectName}/${safeServiceName}"
 }
 
 def normalizeSourceProvider(def rawProvider, def repoUrl) {
