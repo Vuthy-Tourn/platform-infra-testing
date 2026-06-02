@@ -29,7 +29,7 @@ pipeline {
         string(name: 'GITOPS_BRANCH',             defaultValue: 'main', description: 'GitOps branch to update')
         string(name: 'BACKEND_SOURCE_ARCHIVE_BASE_URL', defaultValue: '', description: 'Internal backend endpoint used to download uploaded source archives')
         string(name: 'BACKEND_SOURCE_ARCHIVE_TOKEN',    defaultValue: '', description: 'Internal backend token used to download uploaded source archives')
-        string(name: 'SERVICE_JOB_NAME',          defaultValue: 'deploy-service-test', description: 'Jenkins job name used to deploy one service')
+        string(name: 'SERVICE_JOB_NAME',          defaultValue: 'deploy-service', description: 'Jenkins job name used to deploy one service')
         string(name: 'SONARQUBE_SERVER_NAME',     defaultValue: 'sonarqube', description: 'Jenkins SonarQube server configuration name')
         string(name: 'SONARQUBE_SCANNER_TOOL',    defaultValue: '', description: 'Optional Jenkins SonarScanner tool name; empty uses sonar-scanner from PATH')
         string(name: 'SONARQUBE_JDK_TOOL_PREFIX', defaultValue: 'jdk', description: 'Jenkins JDK tool name prefix used for Java SonarQube analysis (example: jdk -> jdk21)')

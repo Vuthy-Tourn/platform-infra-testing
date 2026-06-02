@@ -23,11 +23,11 @@ What you cannot validate yet:
 
 Create two pipeline jobs from SCM:
 
-1. `deploy-service-test`
+1. `deploy-service`
    Script path: `jenkins/Jenkinsfile`
    Branch specifier: `*/main`
 
-2. `deploy-microservices-test`
+2. `deploy-microservices`
    Script path: `jenkins/Jenkinsfile-microservices`
    Branch specifier: `*/main`
 
