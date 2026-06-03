@@ -353,8 +353,8 @@ EOF
                                         a8sSonarScan(
                                             server        : sonarServer,
                                             scannerTool   : params.SONARQUBE_SCANNER_TOOL?.trim(),
-                                            projectKey    : "${env.SAFE_WORKSPACE_ID}-${env.SAFE_PROJECT_NAME}",
-                                            projectName   : env.EFFECTIVE_PROJECT_NAME,
+                                            projectKey    : "${env.SAFE_WORKSPACE_ID}-${env.SAFE_PROJECT_NAME}-${env.SAFE_SERVICE_NAME}",
+                                            projectName   : "${env.EFFECTIVE_PROJECT_NAME}-${env.EFFECTIVE_SERVICE_NAME}",
                                             projectVersion: env.APP_COMMIT_SHA,
                                             sources       : '.',
                                             exclusions    : '**/node_modules/**,**/.next/**,**/dist/**,**/build/**,**/target/**,**/vendor/**,**/.git/**'
