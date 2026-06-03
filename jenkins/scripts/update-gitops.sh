@@ -200,6 +200,44 @@ def startup_probe_enabled(framework: str) -> bool:
     framework = (framework or "").strip()
     return framework in {"springboot-maven", "springboot-gradle", "java-maven", "java-gradle"}
 
+def resolve_service_resources(service_name: str, framework: str, service_type: str) -> dict:
+    normalized_name = slugify(service_name, 255)
+    normalized_framework = (framework or "").strip().lower()
+    normalized_service_type = (service_type or "").strip().lower()
+
+    spring_frameworks = {"springboot-maven", "springboot-gradle", "java-maven", "java-gradle"}
+    node_frameworks = {"nodejs", "nextjs"}
+    static_frameworks = {"react", "static"}
+
+    if normalized_framework in spring_frameworks:
+        if normalized_service_type == "registry" or normalized_name in {"eureka-server", "config-server"}:
+            return {
+                "requests": {"cpu": "100m", "memory": "256Mi"},
+                "limits": {"cpu": "500m", "memory": "512Mi"},
+            }
+        return {
+            "requests": {"cpu": "200m", "memory": "256Mi"},
+            "limits": {"cpu": "500m", "memory": "512Mi"},
+        }
+
+    if normalized_framework in node_frameworks:
+        return {
+            "requests": {"cpu": "100m", "memory": "128Mi"},
+            "limits": {"cpu": "500m", "memory": "512Mi"},
+        }
+
+    if normalized_framework in static_frameworks:
+        return {
+            "requests": {"cpu": "50m", "memory": "64Mi"},
+            "limits": {"cpu": "250m", "memory": "256Mi"},
+        }
+
+    # Safe fallback for unknown services, biased toward backend workloads.
+    return {
+        "requests": {"cpu": "100m", "memory": "256Mi"},
+        "limits": {"cpu": "500m", "memory": "512Mi"},
+    }
+
 def sanitize_port(value, framework: str) -> int:
     default_port = default_container_port(framework)
     raw = str(value or "").strip()
@@ -235,7 +273,7 @@ lines = [
     "  resources:",
     "    requests:",
     '      cpu: "100m"',
-    '      memory: "128Mi"',
+    '      memory: "256Mi"',
     "    limits:",
     '      cpu: "500m"',
     '      memory: "512Mi"',
@@ -285,6 +323,7 @@ for svc in services:
     sync_wave = int(svc.get("syncWave") or 0)
     p_mode = probe_mode(framework)
     startup_enabled = startup_probe_enabled(framework)
+    resources = resolve_service_resources(name, framework, service_type)
     expose_public = svc.get("exposePublic")
     if expose_public is None:
         expose_public = service_type in {"gateway", "frontend"}
@@ -310,11 +349,11 @@ for svc in services:
         '      pullPolicy: "IfNotPresent"',
         "    resources:",
         "      requests:",
-        '        cpu: "100m"',
-        '        memory: "128Mi"',
+        f'        cpu: "{resources["requests"]["cpu"]}"',
+        f'        memory: "{resources["requests"]["memory"]}"',
         "      limits:",
-        '        cpu: "500m"',
-        '        memory: "512Mi"',
+        f'        cpu: "{resources["limits"]["cpu"]}"',
+        f'        memory: "{resources["limits"]["memory"]}"',
         "    probes:",
         f'      mode: "{p_mode}"',
         "      startup:",

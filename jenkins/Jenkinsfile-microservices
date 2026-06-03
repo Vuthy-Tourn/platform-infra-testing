@@ -266,7 +266,6 @@ pipeline {
             when {
                 expression { return !params.DESTROY_MODE && !params.ROLLBACK_MODE && !params.GITOPS_ONLY_UPDATE }
             }
-            agent { label 'istad' }
             steps {
                 script {
                     def services           = decodeServicesFromState(env.PLANNED_SERVICES_STATE)
