@@ -6,6 +6,7 @@
 {{- $runtimeConfigFileName := trim (default "" $service.runtimeConfigFileName) }}
 {{- $runtimeConfigFileContent := default "" $service.runtimeConfigFileContent }}
 {{- $hasRuntimeConfig := and $runtimeConfigFileName (ne (trim $runtimeConfigFileContent) "") }}
+{{- $dependencies := default (list) $service.dependsOn }}
 {{- if $envJson }}
 {{- $envEntries = fromJsonArray $envJson }}
 {{- end }}
@@ -55,6 +56,30 @@ spec:
       {{- if $.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml $.Values.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      {{- if $dependencies }}
+      initContainers:
+        {{- range $dependencyName := $dependencies }}
+        {{- $dependencyPort := 80 }}
+        {{- range $candidate := $.Values.services }}
+          {{- if eq $candidate.name $dependencyName }}
+            {{- $dependencyPort = (default $candidate.containerPort $candidate.servicePort) }}
+          {{- end }}
+        {{- end }}
+        - name: {{ printf "wait-for-%s" $dependencyName | trunc 63 | trimSuffix "-" }}
+          image: "busybox:1.36.1"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              host="{{ include "tenant-app.serviceName" (dict "root" $ "service" (dict "name" $dependencyName)) }}.{{ $.Values.workspace.namespace }}.svc"
+              port="{{ $dependencyPort }}"
+              until nc -z "${host}" "${port}"; do
+                echo "Waiting for ${host}:${port} ..."
+                sleep 2
+              done
+        {{- end }}
       {{- end }}
       containers:
         - name: {{ include "tenant-app.serviceName" $ctx }}

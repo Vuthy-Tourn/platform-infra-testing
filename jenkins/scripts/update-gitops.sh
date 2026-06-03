@@ -190,15 +190,30 @@ def default_container_port(framework: str) -> int:
         return 80
     return 8080
 
-def probe_mode(framework: str) -> str:
+def is_spring_framework(framework: str) -> bool:
     framework = (framework or "").strip()
-    if framework in {"springboot-maven", "springboot-gradle", "java-maven", "java-gradle"}:
-        return "tcp"
+    return framework in {"springboot-maven", "springboot-gradle", "java-maven", "java-gradle"}
+
+def probe_mode(framework: str) -> str:
+    if is_spring_framework(framework):
+        return "http"
     return "http"
 
 def startup_probe_enabled(framework: str) -> bool:
-    framework = (framework or "").strip()
-    return framework in {"springboot-maven", "springboot-gradle", "java-maven", "java-gradle"}
+    return is_spring_framework(framework)
+
+def probe_paths(framework: str) -> dict:
+    if is_spring_framework(framework):
+        return {
+            "startup": "/actuator/health",
+            "readiness": "/actuator/health/readiness",
+            "liveness": "/actuator/health/liveness",
+        }
+    return {
+        "startup": "/",
+        "readiness": "/",
+        "liveness": "/",
+    }
 
 def resolve_service_resources(service_name: str, framework: str, service_type: str) -> dict:
     normalized_name = slugify(service_name, 255)
@@ -255,6 +270,78 @@ except Exception:
 
 if not isinstance(services, list) or not services:
     raise SystemExit("SERVICES_JSON must be a non-empty JSON array.")
+
+service_index = {
+    str(svc.get("name") or "").strip(): svc
+    for svc in services
+    if isinstance(svc, dict) and str(svc.get("name") or "").strip()
+}
+
+derived_sync_wave_cache = {}
+
+def resolve_depends_on(service_name: str, framework: str, service_type: str, raw_depends_on) -> list[str]:
+    explicit_dependencies = [
+        str(dep).strip()
+        for dep in (raw_depends_on or [])
+        if str(dep).strip() and str(dep).strip() in service_index and str(dep).strip() != service_name
+    ]
+
+    inferred_dependencies = []
+    normalized_name = slugify(service_name, 255)
+    normalized_service_type = (service_type or "").strip().lower()
+
+    if is_spring_framework(framework):
+        if normalized_name == "config-server":
+            inferred_dependencies = []
+        elif normalized_name == "eureka-server" or normalized_service_type == "registry":
+            if "config-server" in service_index:
+                inferred_dependencies.append("config-server")
+        else:
+            if "config-server" in service_index:
+                inferred_dependencies.append("config-server")
+            if "eureka-server" in service_index:
+                inferred_dependencies.append("eureka-server")
+
+    seen = set()
+    ordered_dependencies = []
+    for dependency in explicit_dependencies + inferred_dependencies:
+        if dependency not in seen:
+            seen.add(dependency)
+            ordered_dependencies.append(dependency)
+    return ordered_dependencies
+
+def resolve_sync_wave(service_name: str) -> int:
+    if service_name in derived_sync_wave_cache:
+        return derived_sync_wave_cache[service_name]
+
+    svc = service_index.get(service_name)
+    if not svc:
+        return 0
+
+    explicit_sync_wave = svc.get("syncWave")
+    if explicit_sync_wave not in (None, ""):
+        try:
+            derived_sync_wave_cache[service_name] = int(explicit_sync_wave)
+            return derived_sync_wave_cache[service_name]
+        except (TypeError, ValueError):
+            pass
+
+    normalized_name = slugify(service_name, 255)
+    service_type = str(svc.get("serviceType") or "internal").strip().lower()
+    framework = str(svc.get("framework") or "").strip()
+    dependencies = resolve_depends_on(service_name, framework, service_type, svc.get("dependsOn"))
+
+    if dependencies:
+        resolved = max(resolve_sync_wave(dep) for dep in dependencies) + 1
+    elif normalized_name == "config-server":
+        resolved = 0
+    elif service_type == "registry" or normalized_name == "eureka-server":
+        resolved = 1
+    else:
+        resolved = 2
+
+    derived_sync_wave_cache[service_name] = resolved
+    return resolved
 
 lines = [
     "workspace:",
@@ -320,8 +407,10 @@ for svc in services:
     runtime_config_file_content = str(svc.get("runtimeConfigFileContent") or "")
     if runtime_config_file_content_b64:
         runtime_config_file_content = base64.b64decode(runtime_config_file_content_b64).decode("utf-8")
-    sync_wave = int(svc.get("syncWave") or 0)
+    sync_wave = resolve_sync_wave(name)
+    depends_on = resolve_depends_on(name, framework, service_type, svc.get("dependsOn"))
     p_mode = probe_mode(framework)
+    p_paths = probe_paths(framework)
     startup_enabled = startup_probe_enabled(framework)
     resources = resolve_service_resources(name, framework, service_type)
     expose_public = svc.get("exposePublic")
@@ -358,18 +447,19 @@ for svc in services:
         f'      mode: "{p_mode}"',
         "      startup:",
         f"        enabled: {'true' if startup_enabled else 'false'}",
+        f'        path: "{p_paths["startup"]}"',
         "        initialDelaySeconds: 0",
         "        periodSeconds: 5",
         "        failureThreshold: 24",
         "      readiness:",
         "        enabled: true",
-        '        path: "/"',
+        f'        path: "{p_paths["readiness"]}"',
         "        initialDelaySeconds: 10",
         "        periodSeconds: 10",
         "        failureThreshold: 3",
         "      liveness:",
         "        enabled: true",
-        '        path: "/"',
+        f'        path: "{p_paths["liveness"]}"',
         "        initialDelaySeconds: 30",
         "        periodSeconds: 15",
         "        failureThreshold: 3",
@@ -393,6 +483,10 @@ for svc in services:
         "    env: []",
         f"    envJson: {json.dumps(env_json)}",
     ])
+
+    if depends_on:
+        lines.append("    dependsOn:")
+        lines.extend([f'      - "{dep}"' for dep in depends_on])
 
     if runtime_config_file_name and runtime_config_file_content.strip():
         lines.extend([

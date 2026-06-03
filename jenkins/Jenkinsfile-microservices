@@ -119,8 +119,7 @@ pipeline {
                         $class: 'GitSCM',
                         branches: [[name: '*/main']],
                         userRemoteConfigs: [[
-                            url: env.INFRA_REPO_URL,
-                            credentialsId: 'infra-repo-creds'
+                            url: env.INFRA_REPO_URL
                         ]]
                     ])
                 }
