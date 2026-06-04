@@ -661,7 +661,7 @@ EOF
                                         productTypeName       : defectDojoProductTypeName,
                                         productName           : defectDojoProductName,
                                         engagementName        : "Jenkins-${env.BUILD_NUMBER}",
-                                        testTitle             : "Trivy Image Scan - ${env.IMAGE_TAG}"
+                                        testTitle             : "Trivy Image Scan - ${env.EFFECTIVE_SERVICE_NAME} - ${env.IMAGE_TAG}"
                                     )
 
                                     echo "[scan] DefectDojo upload completed"
