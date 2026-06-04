@@ -29,6 +29,9 @@ pipeline {
         string(name: 'GITOPS_BRANCH',             defaultValue: 'main', description: 'GitOps branch to update')
         string(name: 'BACKEND_SOURCE_ARCHIVE_BASE_URL', defaultValue: '', description: 'Internal backend endpoint used to download uploaded source archives')
         string(name: 'BACKEND_SOURCE_ARCHIVE_TOKEN',    defaultValue: '', description: 'Internal backend token used to download uploaded source archives')
+        string(name: 'BACKEND_CALLBACK_URL',            defaultValue: '', description: 'Internal backend base URL for Jenkins callbacks and secret fetches')
+        string(name: 'BACKEND_CALLBACK_TOKEN',          defaultValue: '', description: 'Optional direct callback token when no Jenkins callback credential id is used')
+        string(name: 'BACKEND_CALLBACK_CREDENTIALS_ID', defaultValue: '', description: 'Optional Jenkins secret text credential id for the backend callback token')
         string(name: 'SERVICE_JOB_NAME',          defaultValue: 'deploy-service', description: 'Jenkins job name used to deploy one service')
         string(name: 'SONARQUBE_SERVER_NAME',     defaultValue: 'sonarqube', description: 'Jenkins SonarQube server configuration name')
         string(name: 'SONARQUBE_SCANNER_TOOL',    defaultValue: '', description: 'Optional Jenkins SonarScanner tool name; empty uses sonar-scanner from PATH')
@@ -303,6 +306,9 @@ pipeline {
                                         string(name: 'BRANCH', value: capturedSvc.branch),
                                         string(name: 'BACKEND_SOURCE_ARCHIVE_BASE_URL', value: params.BACKEND_SOURCE_ARCHIVE_BASE_URL ?: ''),
                                         string(name: 'BACKEND_SOURCE_ARCHIVE_TOKEN', value: params.BACKEND_SOURCE_ARCHIVE_TOKEN ?: ''),
+                                        string(name: 'BACKEND_CALLBACK_URL', value: params.BACKEND_CALLBACK_URL ?: ''),
+                                        string(name: 'BACKEND_CALLBACK_TOKEN', value: params.BACKEND_CALLBACK_TOKEN ?: ''),
+                                        string(name: 'BACKEND_CALLBACK_CREDENTIALS_ID', value: params.BACKEND_CALLBACK_CREDENTIALS_ID ?: ''),
                                         string(name: 'USER_ID', value: params.USER_ID),
                                         string(name: 'WORKSPACE_ID', value: env.EFFECTIVE_WORKSPACE_ID),
                                         string(name: 'PROJECT_NAME', value: params.PROJECT_NAME),
