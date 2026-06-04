@@ -633,11 +633,11 @@ EOF
                                 ).trim().toInteger()
 
                                 echo "[scan] ${findingCount} HIGH/CRITICAL finding(s)"
-                                def defectDojoUrl = params.DEFECTDOJO_URL?.trim() ?: 'https://defetchdojo.anajak-khmer.site'
-                                def defectDojoCredentialId = params.DEFECTDOJO_CREDENTIALS_ID?.trim() ?: 'DEFECTDOJO'
-                                def defectDojoProductName = params.DEFECTDOJO_PRODUCT_NAME?.trim() ?: env.EFFECTIVE_PROJECT_NAME
+                                def defectDojoUrl = params.DEFECTDOJO_URL?.trim()
+                                def defectDojoCredentialId = params.DEFECTDOJO_CREDENTIALS_ID?.trim()
+                                def defectDojoProductName = params.DEFECTDOJO_PRODUCT_NAME?.trim()
 
-                                if (params.UPLOAD_DEFECTDOJO && defectDojoUrl && defectDojoCredentialId) {
+                                if (params.UPLOAD_DEFECTDOJO && defectDojoUrl && defectDojoCredentialId && defectDojoProductName) {
                                     echo "[scan] Uploading report to DefectDojo"
 
                                     uploadDefectDojo(
@@ -652,7 +652,7 @@ EOF
 
                                     echo "[scan] DefectDojo upload completed"
                                 } else {
-                                    echo '[scan] DefectDojo upload skipped.'
+                                    echo '[scan] DefectDojo upload skipped because workspace-specific DefectDojo configuration is incomplete.'
                                 }
 
                                 // securityGate(
