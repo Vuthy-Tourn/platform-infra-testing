@@ -676,36 +676,44 @@ EOF
                                         head -c 300 "${reportPath}" || true
                                         echo
                                     """
-                                    withCredentials([string(credentialsId: defectDojoCredentialId, variable: 'DEFECTDOJO_API_KEY')]) {
-                                        sh """
-                                            set -e
-                                            echo "[scan] entering inline DefectDojo curl"
-                                            response_file=\$(mktemp)
-                                            http_code=\$(curl -sS -k -o "\$response_file" -w "%{http_code}" -X POST "${defectDojoUrl}/api/v2/reimport-scan/" \
-                                              -H "Authorization: Token \${DEFECTDOJO_API_KEY}" \
-                                              -F "scan_type=Trivy Scan" \
-                                              -F "file=@${reportPath}" \
-                                              -F "auto_create_context=true" \
-                                              -F "product_type_name=${defectDojoProductTypeName}" \
-                                              -F "product_name=${defectDojoProductName}" \
-                                              -F "engagement_name=Jenkins-${env.BUILD_NUMBER}-${env.EFFECTIVE_SERVICE_NAME}" \
-                                              -F "test_title=Trivy Image Scan - ${env.EFFECTIVE_SERVICE_NAME} - ${env.IMAGE_TAG}" \
-                                              -F "active=true" \
-                                              -F "verified=true" \
-                                              -F "close_old_findings=true")
+                                    echo "[scan] resolving Jenkins credential id: ${defectDojoCredentialId}"
+                                    try {
+                                        withCredentials([string(credentialsId: defectDojoCredentialId, variable: 'DEFECTDOJO_API_KEY')]) {
+                                            sh """
+                                                set -e
+                                                echo "[scan] entering inline DefectDojo curl"
+                                                response_file=\$(mktemp)
+                                                http_code=\$(curl -sS -k -o "\$response_file" -w "%{http_code}" -X POST "${defectDojoUrl}/api/v2/reimport-scan/" \
+                                                  -H "Authorization: Token \${DEFECTDOJO_API_KEY}" \
+                                                  -F "scan_type=Trivy Scan" \
+                                                  -F "file=@${reportPath}" \
+                                                  -F "auto_create_context=true" \
+                                                  -F "product_type_name=${defectDojoProductTypeName}" \
+                                                  -F "product_name=${defectDojoProductName}" \
+                                                  -F "engagement_name=Jenkins-${env.BUILD_NUMBER}-${env.EFFECTIVE_SERVICE_NAME}" \
+                                                  -F "test_title=Trivy Image Scan - ${env.EFFECTIVE_SERVICE_NAME} - ${env.IMAGE_TAG}" \
+                                                  -F "active=true" \
+                                                  -F "verified=true" \
+                                                  -F "close_old_findings=true")
 
-                                            echo "[defectdojo] HTTP \$http_code"
-                                            echo "[defectdojo] response:"
-                                            cat "\$response_file"
+                                                echo "[defectdojo] HTTP \$http_code"
+                                                echo "[defectdojo] response:"
+                                                cat "\$response_file"
 
-                                            if [ "\$http_code" -lt 200 ] || [ "\$http_code" -ge 300 ]; then
-                                              rm -f "\$response_file"
-                                              exit 22
-                                            fi
+                                                if [ "\$http_code" -lt 200 ] || [ "\$http_code" -ge 300 ]; then
+                                                  rm -f "\$response_file"
+                                                  exit 22
+                                                fi
 
-                                            echo "[scan] DefectDojo curl returned successfully"
-                                            rm -f "\$response_file"
-                                        """
+                                                echo "[scan] DefectDojo curl returned successfully"
+                                                rm -f "\$response_file"
+                                            """
+                                        }
+                                    } catch (err) {
+                                        echo "[scan] DefectDojo upload failed before/inside curl"
+                                        echo "[scan] DefectDojo exception type: ${err.getClass().getName()}"
+                                        echo "[scan] DefectDojo exception message: ${err.getMessage()}"
+                                        throw err
                                     }
 
                                     echo "[scan] DefectDojo upload completed"
