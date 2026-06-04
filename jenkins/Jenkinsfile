@@ -598,12 +598,23 @@ EOF
                             if (params.ENABLE_TRIVY_SCAN) {
                                 def trivyPath = "/home/istad/trivy/docker-compose.yml"
                                 def reportPath = "/home/istad/trivy/reports/trivy-report.json"
-                                def trivyCacheDir = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}"
+                                def trivyCacheSeedDir = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}-seed"
+                                def trivyCacheDir = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}-${env.BUILD_NUMBER}"
+                                def trivyCacheLockFile = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}.lock"
                                 def trivyTimeout = "30m"
 
                                 sh """
                                     mkdir -p "/home/istad/trivy/reports"
-                                    docker compose -f "${trivyPath}" exec --no-TTY trivy sh -lc 'mkdir -p "${trivyCacheDir}"'
+                                    flock -w 1800 "${trivyCacheLockFile}" \
+                                      docker compose -f "${trivyPath}" exec --no-TTY trivy sh -lc '
+                                        set -e
+                                        mkdir -p "${trivyCacheSeedDir}"
+                                        trivy image --cache-dir "${trivyCacheSeedDir}" --download-db-only
+                                        trivy image --cache-dir "${trivyCacheSeedDir}" --download-java-db-only || true
+                                        rm -rf "${trivyCacheDir}"
+                                        mkdir -p "${trivyCacheDir}"
+                                        cp -a "${trivyCacheSeedDir}/." "${trivyCacheDir}/"
+                                      '
                                 """
 
                                 echo "[scan] Starting Trivy scan for ${env.IMAGE_FULL} (timeout: ${trivyTimeout})"
@@ -682,6 +693,10 @@ EOF
                                       --exit-code 1 \
                                       --no-progress \
                                       "${env.IMAGE_FULL}"
+                                """
+
+                                sh """
+                                    docker compose -f "${trivyPath}" exec --no-TTY trivy sh -lc 'rm -rf "${trivyCacheDir}"'
                                 """
                             } else {
                                 echo '[scan] ENABLE_TRIVY_SCAN=false — skipping.'
