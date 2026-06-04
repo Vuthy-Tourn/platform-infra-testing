@@ -587,7 +587,8 @@ EOF
                         script {
                             if (params.ENABLE_TRIVY_SCAN) {
                                 def trivyPath = "/home/istad/trivy/docker-compose.yml"
-                                def reportPath = "/home/istad/trivy/reports/trivy-report.json"
+                                def trivyReportFileName = "trivy-report-${env.SAFE_SERVICE_NAME ?: 'service'}-${env.BUILD_NUMBER}.json"
+                                def reportPath = "/home/istad/trivy/reports/${trivyReportFileName}"
                                 def trivyCacheSeedDir = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}-seed"
                                 def trivyCacheDir = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}-${env.BUILD_NUMBER}"
                                 def trivyCacheLockFile = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}.lock"
@@ -621,7 +622,7 @@ EOF
                                       --exit-code 0 \
                                       --severity HIGH,CRITICAL \
                                       --format json \
-                                      -o /reports/trivy-report.json \
+                                      -o "/reports/${trivyReportFileName}" \
                                       "${env.IMAGE_FULL}"
                                 """
 
@@ -671,6 +672,9 @@ EOF
 
                                 sh """
                                     docker compose -f "${trivyPath}" exec --no-TTY trivy sh -lc 'rm -rf "${trivyCacheDir}"'
+                                """
+                                sh """
+                                    rm -f "${reportPath}"
                                 """
 
                                 // securityGate(
