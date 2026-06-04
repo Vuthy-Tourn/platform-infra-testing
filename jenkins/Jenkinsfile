@@ -31,6 +31,10 @@ pipeline {
         booleanParam(name: 'ENABLE_SONARQUBE_SCAN',         defaultValue: false, description: 'Run SonarQube source analysis')
         booleanParam(name: 'ENABLE_SONARQUBE_QUALITY_GATE', defaultValue: false, description: 'Wait for SonarQube quality gate before build')
         booleanParam(name: 'ENABLE_TRIVY_SCAN',             defaultValue: true,  description: 'Run local Trivy image scan')
+        booleanParam(name: 'UPLOAD_DEFECTDOJO',             defaultValue: true,  description: 'Upload Trivy scan results to DefectDojo')
+        string(name: 'DEFECTDOJO_URL',                      defaultValue: '', description: 'Optional DefectDojo base URL override')
+        string(name: 'DEFECTDOJO_CREDENTIALS_ID',           defaultValue: '', description: 'Optional Jenkins secret text credential id for the DefectDojo API token')
+        string(name: 'DEFECTDOJO_PRODUCT_NAME',             defaultValue: '', description: 'Optional DefectDojo product name override')
         booleanParam(name: 'ROLLBACK_MODE',                 defaultValue: false, description: 'Skip build/scan/push and update GitOps with a saved image tag')
     }
 
@@ -636,19 +640,27 @@ EOF
                                 ).trim().toInteger()
 
                                 echo "[scan] ${findingCount} HIGH/CRITICAL finding(s)"
-                                echo "[scan] Uploading report to DefectDojo"
+                                def defectDojoUrl = params.DEFECTDOJO_URL?.trim() ?: 'https://defetchdojo.anajak-khmer.site'
+                                def defectDojoCredentialId = params.DEFECTDOJO_CREDENTIALS_ID?.trim() ?: 'DEFECTDOJO'
+                                def defectDojoProductName = params.DEFECTDOJO_PRODUCT_NAME?.trim() ?: env.EFFECTIVE_PROJECT_NAME
 
-                                uploadDefectDojo(
-                                    defectdojoUrl         : 'https://defetchdojo.anajak-khmer.site',
-                                    defectdojoCredentialId: 'DEFECTDOJO',
-                                    reportPath            : reportPath,
-                                    productTypeName       : 'Web Applications',
-                                    productName           : env.EFFECTIVE_PROJECT_NAME,
-                                    engagementName        : "Jenkins-${env.BUILD_NUMBER}",
-                                    testTitle             : "Trivy Image Scan - ${env.IMAGE_TAG}"
-                                )
+                                if (params.UPLOAD_DEFECTDOJO && defectDojoUrl && defectDojoCredentialId) {
+                                    echo "[scan] Uploading report to DefectDojo"
 
-                                echo "[scan] DefectDojo upload completed"
+                                    uploadDefectDojo(
+                                        defectdojoUrl         : defectDojoUrl,
+                                        defectdojoCredentialId: defectDojoCredentialId,
+                                        reportPath            : reportPath,
+                                        productTypeName       : 'Web Applications',
+                                        productName           : defectDojoProductName,
+                                        engagementName        : "Jenkins-${env.BUILD_NUMBER}",
+                                        testTitle             : "Trivy Image Scan - ${env.IMAGE_TAG}"
+                                    )
+
+                                    echo "[scan] DefectDojo upload completed"
+                                } else {
+                                    echo '[scan] DefectDojo upload skipped.'
+                                }
 
 
                                 // security gate: fail build if any CRITICAL vulnerability found
