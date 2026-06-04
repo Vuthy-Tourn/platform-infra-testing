@@ -661,7 +661,7 @@ EOF
                                         reportPath            : reportPath,
                                         productTypeName       : defectDojoProductTypeName,
                                         productName           : defectDojoProductName,
-                                        engagementName        : "Jenkins-${env.BUILD_NUMBER}",
+                                        engagementName        : "Jenkins-${env.BUILD_NUMBER}-${env.EFFECTIVE_SERVICE_NAME}",
                                         testTitle             : "Trivy Image Scan - ${env.EFFECTIVE_SERVICE_NAME} - ${env.IMAGE_TAG}"
                                     )
 
