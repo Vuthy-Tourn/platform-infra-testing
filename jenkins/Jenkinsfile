@@ -664,9 +664,22 @@ EOF
 
                                 if (params.UPLOAD_DEFECTDOJO && defectDojoUrl && defectDojoCredentialId && defectDojoProductName) {
                                     echo "[scan] Uploading report to DefectDojo (productType=${defectDojoProductTypeName}, productName=${defectDojoProductName})"
+                                    echo "[scan] INLINE DEFECTDOJO V4 ACTIVE"
+                                    echo "[scan] reportPath=${reportPath}"
+                                    sh """
+                                        set -e
+                                        echo "[scan] verifying report file before upload"
+                                        ls -lh "${reportPath}"
+                                        test -s "${reportPath}"
+                                        echo "[scan] report bytes: \$(wc -c < "${reportPath}")"
+                                        echo "[scan] report preview:"
+                                        head -c 300 "${reportPath}" || true
+                                        echo
+                                    """
                                     withCredentials([string(credentialsId: defectDojoCredentialId, variable: 'DEFECTDOJO_API_KEY')]) {
                                         sh """
                                             set -e
+                                            echo "[scan] entering inline DefectDojo curl"
                                             response_file=\$(mktemp)
                                             http_code=\$(curl -sS -k -o "\$response_file" -w "%{http_code}" -X POST "${defectDojoUrl}/api/v2/reimport-scan/" \
                                               -H "Authorization: Token \${DEFECTDOJO_API_KEY}" \
@@ -690,6 +703,7 @@ EOF
                                               exit 22
                                             fi
 
+                                            echo "[scan] DefectDojo curl returned successfully"
                                             rm -f "\$response_file"
                                         """
                                     }
