@@ -646,15 +646,18 @@ EOF
                                 def defectDojoUrl = params.DEFECTDOJO_URL?.trim()
                                 def defectDojoCredentialId = params.DEFECTDOJO_CREDENTIALS_ID?.trim()
                                 def defectDojoProductName = params.DEFECTDOJO_PRODUCT_NAME?.trim()
+                                def defectDojoProductTypeName = defectDojoProductName?.startsWith('Workspace - ')
+                                    ? 'Workspace Projects'
+                                    : 'Web Applications'
 
                                 if (params.UPLOAD_DEFECTDOJO && defectDojoUrl && defectDojoCredentialId && defectDojoProductName) {
-                                    echo "[scan] Uploading report to DefectDojo"
+                                    echo "[scan] Uploading report to DefectDojo (productType=${defectDojoProductTypeName}, productName=${defectDojoProductName})"
 
                                     uploadDefectDojo(
                                         defectdojoUrl         : defectDojoUrl,
                                         defectdojoCredentialId: defectDojoCredentialId,
                                         reportPath            : reportPath,
-                                        productTypeName       : 'Web Applications',
+                                        productTypeName       : defectDojoProductTypeName,
                                         productName           : defectDojoProductName,
                                         engagementName        : "Jenkins-${env.BUILD_NUMBER}",
                                         testTitle             : "Trivy Image Scan - ${env.IMAGE_TAG}"
