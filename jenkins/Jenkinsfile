@@ -598,7 +598,7 @@ EOF
                             if (params.ENABLE_TRIVY_SCAN) {
                                 def trivyPath = "/home/istad/trivy/docker-compose.yml"
                                 def reportPath = "/home/istad/trivy/reports/trivy-report.json"
-                                def trivyCacheDir = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}-${env.BUILD_NUMBER}"
+                                def trivyCacheDir = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}"
                                 def trivyTimeout = "30m"
 
                                 sh """
