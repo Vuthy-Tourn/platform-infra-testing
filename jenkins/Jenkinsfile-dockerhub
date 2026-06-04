@@ -14,6 +14,9 @@ pipeline {
         string(name: 'BRANCH',                    defaultValue: 'main', description: 'Git branch to build')
         string(name: 'BACKEND_SOURCE_ARCHIVE_BASE_URL', defaultValue: '', description: 'Internal backend endpoint used to download uploaded source archives')
         string(name: 'BACKEND_SOURCE_ARCHIVE_TOKEN',    defaultValue: '', description: 'Internal backend token used to download uploaded source archives')
+        string(name: 'BACKEND_CALLBACK_URL',            defaultValue: '', description: 'Internal backend base URL for Jenkins callbacks and secret fetches')
+        string(name: 'BACKEND_CALLBACK_TOKEN',          defaultValue: '', description: 'Optional direct callback token when no Jenkins callback credential id is used')
+        string(name: 'BACKEND_CALLBACK_CREDENTIALS_ID', defaultValue: '', description: 'Optional Jenkins secret text credential id for the backend callback token')
         string(name: 'USER_ID',                   defaultValue: '', description: 'Tenant user id')
         string(name: 'WORKSPACE_ID',              defaultValue: '', description: 'Workspace id/slug for GitOps path partitioning and Kubernetes namespace')
         string(name: 'PROJECT_NAME',              defaultValue: '', description: 'Project slug')
@@ -656,6 +659,13 @@ EOF
                                     echo "[scan] Uploading report to DefectDojo (productType=${defectDojoProductTypeName}, productName=${defectDojoProductName})"
                                     echo "[scan] INLINE DEFECTDOJO V4 ACTIVE"
                                     echo "[scan] reportPath=${reportPath}"
+                                    def callbackBaseUrl = params.BACKEND_CALLBACK_URL?.trim()
+                                    def callbackCredentialId = params.BACKEND_CALLBACK_CREDENTIALS_ID?.trim()
+                                    def callbackToken = params.BACKEND_CALLBACK_TOKEN?.trim()
+                                    def canFetchDefectDojoToken = callbackBaseUrl && (callbackCredentialId || callbackToken) && env.EFFECTIVE_WORKSPACE_ID
+                                    def defectDojoTokenFetchUrl = canFetchDefectDojoToken
+                                        ? "${callbackBaseUrl}/api/internal/microservices/defectdojo-token?workspaceId=${env.EFFECTIVE_WORKSPACE_ID}"
+                                        : ""
                                     sh """
                                         set -e
                                         echo "[scan] verifying report file before upload"
@@ -666,12 +676,17 @@ EOF
                                         head -c 300 "${reportPath}" || true
                                         echo
                                     """
-                                    echo "[scan] resolving Jenkins credential id: ${defectDojoCredentialId}"
                                     try {
-                                        withCredentials([string(credentialsId: defectDojoCredentialId, variable: 'DEFECTDOJO_API_KEY')]) {
-                                            sh """
+                                        if (canFetchDefectDojoToken) {
+                                            echo "[scan] fetching DefectDojo token via backend callback"
+                                            def uploadScript = """
                                                 set -e
                                                 echo "[scan] entering inline DefectDojo curl"
+                                                DEFECTDOJO_API_KEY=\$(curl -fsS -H "Authorization: Bearer \${BACKEND_CALLBACK_AUTH_TOKEN}" "${defectDojoTokenFetchUrl}")
+                                                if [ -z "\$DEFECTDOJO_API_KEY" ]; then
+                                                  echo "[scan] backend callback returned an empty DefectDojo token"
+                                                  exit 1
+                                                fi
                                                 response_file=\$(mktemp)
                                                 http_code=\$(curl -sS -k -o "\$response_file" -w "%{http_code}" -X POST "${defectDojoUrl}/api/v2/reimport-scan/" \
                                                   -H "Authorization: Token \${DEFECTDOJO_API_KEY}" \
@@ -698,6 +713,49 @@ EOF
                                                 echo "[scan] DefectDojo curl returned successfully"
                                                 rm -f "\$response_file"
                                             """
+                                            if (callbackCredentialId) {
+                                                echo "[scan] resolving backend callback credential id: ${callbackCredentialId}"
+                                                withCredentials([string(credentialsId: callbackCredentialId, variable: 'BACKEND_CALLBACK_AUTH_TOKEN')]) {
+                                                    sh uploadScript
+                                                }
+                                            } else {
+                                                withEnv(["BACKEND_CALLBACK_AUTH_TOKEN=${callbackToken}"]) {
+                                                    sh uploadScript
+                                                }
+                                            }
+                                        } else {
+                                            echo "[scan] resolving Jenkins credential id: ${defectDojoCredentialId}"
+                                            withCredentials([string(credentialsId: defectDojoCredentialId, variable: 'DEFECTDOJO_API_KEY')]) {
+                                                sh """
+                                                    set -e
+                                                    echo "[scan] entering inline DefectDojo curl"
+                                                    response_file=\$(mktemp)
+                                                    http_code=\$(curl -sS -k -o "\$response_file" -w "%{http_code}" -X POST "${defectDojoUrl}/api/v2/reimport-scan/" \
+                                                      -H "Authorization: Token \${DEFECTDOJO_API_KEY}" \
+                                                      -F "scan_type=Trivy Scan" \
+                                                      -F "file=@${reportPath}" \
+                                                      -F "auto_create_context=true" \
+                                                      -F "product_type_name=${defectDojoProductTypeName}" \
+                                                      -F "product_name=${defectDojoProductName}" \
+                                                      -F "engagement_name=Jenkins-${env.BUILD_NUMBER}-${env.EFFECTIVE_SERVICE_NAME}" \
+                                                      -F "test_title=Trivy Image Scan - ${env.EFFECTIVE_SERVICE_NAME} - ${env.IMAGE_TAG}" \
+                                                      -F "active=true" \
+                                                      -F "verified=true" \
+                                                      -F "close_old_findings=true")
+
+                                                    echo "[defectdojo] HTTP \$http_code"
+                                                    echo "[defectdojo] response:"
+                                                    cat "\$response_file"
+
+                                                    if [ "\$http_code" -lt 200 ] || [ "\$http_code" -ge 300 ]; then
+                                                      rm -f "\$response_file"
+                                                      exit 22
+                                                    fi
+
+                                                    echo "[scan] DefectDojo curl returned successfully"
+                                                    rm -f "\$response_file"
+                                                """
+                                            }
                                         }
                                     } catch (err) {
                                         echo "[scan] DefectDojo upload failed before/inside curl"
