@@ -598,25 +598,19 @@ EOF
 
                         // ── Scan ──────────────────────────────────────────
                         script {
+                            def JENKINS_HOME_DIR = env.JENKINS_HOME ?: "/home/istad/jenkins"
                             if (params.ENABLE_TRIVY_SCAN) {
-                                def trivyPath = "/home/istad/jenkins/trivy/docker-compose.yml"
+                                def trivyBaseDir = "${JENKINS_HOME_DIR}/trivy"
+                                def trivyCacheBase = "${JENKINS_HOME_DIR}/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}"
+                                
+                                def trivyPath = "${trivyBaseDir}/docker-compose.yml"
                                 def trivyReportFileName = "trivy-report-${env.SAFE_SERVICE_NAME ?: 'service'}-${env.BUILD_NUMBER}.json"
-                                def reportPath = "/home/istad/jenkins/trivy/reports/${trivyReportFileName}"
-                                def trivyCacheSeedDir = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}-seed"
-                                def trivyCacheDir = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}-${env.BUILD_NUMBER}"
-                                def trivyCacheLockFile = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}.lock"
+                                def reportPath = "${trivyBaseDir}/reports/${trivyReportFileName}"
+                                
+                                def trivyCacheSeedDir = "${trivyCacheBase}-seed"
+                                def trivyCacheDir     = "${trivyCacheBase}-${env.BUILD_NUMBER}"
+                                def trivyCacheLockFile = "${trivyCacheBase}.lock"
                                 def trivyTimeout = "30m"
-
-                                sh """
-                                    whoami
-                                    id
-
-                                    ls -ld /tmp
-
-                                    touch "${trivyCacheLockFile}" || true
-
-                                    ls -l "${trivyCacheLockFile}" || true
-                                """
 
                                 sh """
                                     mkdir -p "/home/istad/jenkins/trivy/reports"
