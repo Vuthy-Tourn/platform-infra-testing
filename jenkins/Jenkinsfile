@@ -598,11 +598,11 @@ EOF
 
                         // ── Scan ──────────────────────────────────────────
                         script {
-                            def JENKINS_HOME_DIR = env.JENKINS_HOME ?: "/home/istad/jenkins"
+                            def JENKINS_HOME_DIR = "/home/istad/jenkins"
                             if (params.ENABLE_TRIVY_SCAN) {
                                 def trivyBaseDir = "${JENKINS_HOME_DIR}/trivy"
                                 def trivyCacheBase = "${JENKINS_HOME_DIR}/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}"
-                                
+
                                 def trivyPath = "${trivyBaseDir}/docker-compose.yml"
                                 def trivyReportFileName = "trivy-report-${env.SAFE_SERVICE_NAME ?: 'service'}-${env.BUILD_NUMBER}.json"
                                 def reportPath = "${trivyBaseDir}/reports/${trivyReportFileName}"
