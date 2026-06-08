@@ -599,9 +599,9 @@ EOF
                         // ── Scan ──────────────────────────────────────────
                         script {
                             if (params.ENABLE_TRIVY_SCAN) {
-                                def trivyPath = "/home/istad/trivy/docker-compose.yml"
+                                def trivyPath = "/home/istad/jenkins/trivy/docker-compose.yml"
                                 def trivyReportFileName = "trivy-report-${env.SAFE_SERVICE_NAME ?: 'service'}-${env.BUILD_NUMBER}.json"
-                                def reportPath = "/home/istad/trivy/reports/${trivyReportFileName}"
+                                def reportPath = "/home/istad/jenkins/trivy/reports/${trivyReportFileName}"
                                 def trivyCacheSeedDir = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}-seed"
                                 def trivyCacheDir = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}-${env.BUILD_NUMBER}"
                                 def trivyCacheLockFile = "/tmp/trivy-cache-${env.JOB_NAME?.replaceAll('[^A-Za-z0-9_.-]+', '-') ?: 'job'}.lock"
@@ -619,7 +619,7 @@ EOF
                                 """
 
                                 sh """
-                                    mkdir -p "/home/istad/trivy/reports"
+                                    mkdir -p "/home/istad/jenkins/trivy/reports"
                                     flock -w 1800 "${trivyCacheLockFile}" \
                                       docker compose -f "${trivyPath}" exec --no-TTY trivy sh -lc '
                                         set -e
