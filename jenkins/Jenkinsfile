@@ -608,6 +608,17 @@ EOF
                                 def trivyTimeout = "30m"
 
                                 sh """
+                                    whoami
+                                    id
+
+                                    ls -ld /tmp
+
+                                    touch "${trivyCacheLockFile}" || true
+
+                                    ls -l "${trivyCacheLockFile}" || true
+                                """
+
+                                sh """
                                     mkdir -p "/home/istad/trivy/reports"
                                     flock -w 1800 "${trivyCacheLockFile}" \
                                       docker compose -f "${trivyPath}" exec --no-TTY trivy sh -lc '
