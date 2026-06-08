@@ -1,7 +1,7 @@
 @Library(['share_lib@master', 'a8s-sonarqube@main']) _
 
 pipeline {
-     agent { label 'master' }
+     agent { label 'istad' }
 
     options {
         timeout(time: 20, unit: 'MINUTES')
