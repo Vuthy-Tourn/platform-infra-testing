@@ -644,6 +644,18 @@ EOF
                                     "${env.IMAGE_FULL}"
                                 """
 
+                                sh """
+                                    echo "=== VERIFY TRIVY REPORT ==="
+
+                                    docker compose -f "${trivyPath}" exec --no-TTY trivy \
+                                    sh -c 'ls -lah /reports'
+
+                                    ls -lah "${trivyBaseDir}/reports"
+
+                                    docker compose -f "${trivyPath}" exec --no-TTY trivy \
+                                    test -f "/reports/${trivyReportFileName}"
+                                """
+
                                 def findingCount = sh(
                                     script: """
                                         set -e
