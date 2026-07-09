@@ -2,7 +2,9 @@
 
 pipeline {
     // agent { label 'istad' }
-    agent any
+    agent {
+        label 'built-in'
+    }
 
     options {
         timeout(time: 20, unit: 'MINUTES')
