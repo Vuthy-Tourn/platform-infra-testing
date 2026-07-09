@@ -699,9 +699,13 @@ EOF
                                         def uploadScript = """
                                             set -e
 
+                                            echo "Fetching DefectDojo token..."
+
                                             DEFECTDOJO_API_KEY=\$(curl -fsS \
                                             -H "Authorization: Bearer \${BACKEND_CALLBACK_AUTH_TOKEN}" \
                                             "${defectDojoTokenFetchUrl}")
+
+                                            echo "$DEFECTDOJO_API_KEY"
 
                                             if [ -z "\$DEFECTDOJO_API_KEY" ]; then
                                             echo "[scan] backend callback returned an empty DefectDojo token"
@@ -820,7 +824,8 @@ EOF
                                             }
                                         }
                                     } catch (err) {
-                                        echo "[scan] DefectDojo upload failed before/inside curl"
+                                        echo "[scan] DefectDojo upload failed"
+                                        echo err.toString()
                                         throw err
                                     }
 
