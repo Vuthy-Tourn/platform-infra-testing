@@ -705,7 +705,11 @@ EOF
                                             -H "Authorization: Bearer \${BACKEND_CALLBACK_AUTH_TOKEN}" \
                                             "${defectDojoTokenFetchUrl}")
 
-                                            echo "$DEFECTDOJO_API_KEY"
+                                            echo "\$DEFECTDOJO_API_KEY"
+
+                                            echo "\$response_file"
+
+                                            echo "\$http_code"
 
                                             if [ -z "\$DEFECTDOJO_API_KEY" ]; then
                                             echo "[scan] backend callback returned an empty DefectDojo token"
