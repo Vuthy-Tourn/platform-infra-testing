@@ -600,13 +600,13 @@ pipeline {
                     : "[error] One or more services failed. Check the deployment log for the failing step."
             }
         }
-        always {
-            script {
-                echo '[deploy] Workspace kept on disk for Git and layer cache reuse.'
-                sh 'set +x; find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle-home" -type d -exec rm -rf {} + 2>/dev/null || true'
-                sh 'set +x; find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle"      -type d -exec rm -rf {} + 2>/dev/null || true'
-            }
-        }
+        // always {
+        //     script {
+        //         echo '[deploy] Workspace kept on disk for Git and layer cache reuse.'
+        //         sh 'set +x; find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle-home" -type d -exec rm -rf {} + 2>/dev/null || true'
+        //         sh 'set +x; find "$WORKSPACE/service-plan" -maxdepth 3 -name ".gradle"      -type d -exec rm -rf {} + 2>/dev/null || true'
+        //     }
+        // }
     }
 }
 
