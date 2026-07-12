@@ -2,9 +2,10 @@
 
 pipeline {
     // agent { label 'istad' }
-    agent {
-        label 'built-in'
-    }
+    // agent {
+    //     label 'built-in'
+    // }
+    agent none
 
     options {
         timeout(time: 20, unit: 'MINUTES')
@@ -53,7 +54,23 @@ pipeline {
     stages {
 
         // ──────────────────────────────────────────────────────────────────────
+        stage('Choose Agent') {
+            steps {
+                script {
+                    if (isAgentOnline('istad')) {
+                        env.BUILD_NODE = 'istad'
+                    } else {
+                        env.BUILD_NODE = 'built-in'
+                    }
+                }
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────────────
         stage('Validate input') {
+             agent {
+                label "${env.BUILD_NODE}"
+            }
             steps {
                 script {
                     if (!params.REPO_URL?.trim()) {
@@ -140,6 +157,9 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('Checkout infra') {
+             agent {
+                label "${env.BUILD_NODE}"
+            }
             steps {
                 dir('platform-infra') {
                     checkout([
@@ -156,6 +176,9 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('Checkout user repository') {
+             agent {
+                label "${env.BUILD_NODE}"
+            }
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
@@ -229,6 +252,9 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('Detect framework') {
+             agent {
+                label "${env.BUILD_NODE}"
+            }
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
@@ -259,6 +285,9 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('Detect Java runtime') {
+             agent {
+                label "${env.BUILD_NODE}"
+            }
             when {
                 expression { return !params.ROLLBACK_MODE && params.ENABLE_SONARQUBE_SCAN }
             }
@@ -297,6 +326,9 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('SonarQube Analysis') {
+             agent {
+                label "${env.BUILD_NODE}"
+            }
             when {
                 expression { return !params.ROLLBACK_MODE && params.ENABLE_SONARQUBE_SCAN }
             }
@@ -412,6 +444,9 @@ EOF
 
         // ──────────────────────────────────────────────────────────────────────
         stage('SonarQube Quality Gate') {
+             agent {
+                label "${env.BUILD_NODE}"
+            }
             when {
                 expression {
                     return !params.ROLLBACK_MODE &&
@@ -429,6 +464,9 @@ EOF
         // stays in the local Docker daemon — no docker save / stash / docker load
         // round-trip needed.
         stage('Build → Scan → Push') {
+             agent {
+                label "${env.BUILD_NODE}"
+            }
             when {
                 expression { return !params.ROLLBACK_MODE }
             }
