@@ -14,7 +14,9 @@
  */
 pipeline {
     // agent { label 'istad' }
-    agent none
+    agent {
+        label 'istad || built-in'
+    }
 
     options {
         timeout(time: 90, unit: 'MINUTES')
@@ -60,23 +62,7 @@ pipeline {
     stages {
 
         // ──────────────────────────────────────────────────────────────────────
-        stage('Choose Agent') {
-            steps {
-                script {
-                    if (isAgentOnline('istad')) {
-                        env.BUILD_NODE = 'istad'
-                    } else {
-                        env.BUILD_NODE = 'built-in'
-                    }
-                }
-            }
-        }
-
-        // ──────────────────────────────────────────────────────────────────────
         stage('Validate') {
-             agent {
-                label "${env.BUILD_NODE}"
-            }
             steps {
                 script {
                     if (!params.USER_ID?.trim()) {
@@ -137,9 +123,6 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('Checkout infra') {
-            agent {
-                label "${env.BUILD_NODE}"
-            }
             steps {
                 dir('platform-infra') {
                     checkout([
@@ -170,9 +153,6 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('Resolve deploy order') {
-            agent {
-                label "${env.BUILD_NODE}"
-            }
             steps {
                 script {
                     def services = parseJson(params.SERVICES_JSON)
@@ -186,9 +166,6 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('Prepare release plan') {
-             agent {
-                label "${env.BUILD_NODE}"
-            }
             when {
                 expression { return !params.DESTROY_MODE }
             }
@@ -295,9 +272,6 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('Build and push services') {
-             agent {
-                label "${env.BUILD_NODE}"
-            }
             when {
                 expression { return !params.DESTROY_MODE && !params.ROLLBACK_MODE && !params.GITOPS_ONLY_UPDATE }
             }
@@ -395,9 +369,6 @@ pipeline {
 
         // ──────────────────────────────────────────────────────────────────────
         stage('Update GitOps repository (batched)') {
-             agent {
-                label "${env.BUILD_NODE}"
-            }
             when {
                 expression {
                     return params.ENABLE_GITOPS_UPDATE ||
