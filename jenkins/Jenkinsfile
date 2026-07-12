@@ -53,19 +53,6 @@ pipeline {
     stages {
 
         // ──────────────────────────────────────────────────────────────────────
-        stage('Choose Agent') {
-            steps {
-                script {
-                    if (isAgentOnline('istad')) {
-                        env.BUILD_NODE = 'istad'
-                    } else {
-                        env.BUILD_NODE = 'built-in'
-                    }
-                }
-            }
-        }
-
-        // ──────────────────────────────────────────────────────────────────────
         stage('Validate input') {
             steps {
                 script {
