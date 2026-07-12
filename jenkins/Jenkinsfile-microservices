@@ -13,10 +13,10 @@
  *   7. gitops-batch uses fetch+reset when the directory already exists (preserves cache).
  */
 pipeline {
-    // agent { label 'istad' }
-    agent {
-        label 'istad || built-in'
-    }
+    agent { label 'istad' }
+    // agent {
+    //     label 'built-in'
+    // }
 
     options {
         timeout(time: 90, unit: 'MINUTES')
